@@ -1,0 +1,26 @@
+{
+  "contacts": {
+    "OSCAR HERRANZ": {
+      "codigo": "Oscar Herranz",
+      "nombre": "Oscar Herranz",
+      "apellido": null,
+      "email": "oscar.herranz@test.com",
+      "email_cc": "cc1@test.com"
+    },
+    "JUAN BERRAL": {
+      "codigo": "Juan Berral",
+      "nombre": "Juan Berral",
+      "apellido": null,
+      "email": "juan.berral@test.com",
+      "email_cc": null
+    },
+    "MARIA GREGORIO": {
+      "codigo": "Maria Gregorio",
+      "nombre": "Maria Gregorio",
+      "apellido": null,
+      "email": "maria.gregorio@test.com",
+      "email_cc": "cc2@test.com"
+    }
+  },
+  "last_updated": "2026-03-05T09:13:53.310516"
+}

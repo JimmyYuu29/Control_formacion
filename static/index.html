@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Formacion Evaluation Splitter</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --primary-light: #eff6ff;
+            --success: #16a34a;
+            --success-bg: #f0fdf4;
+            --error: #dc2626;
+            --error-bg: #fef2f2;
+            --warning: #d97706;
+            --warning-bg: #fffbeb;
+            --info: #2563eb;
+            --bg: #ffffff;
+            --bg-sec: #f8fafc;
+            --border: #e2e8f0;
+            --text: #1e293b;
+            --text-sec: #64748b;
+            --shadow: 0 1px 3px rgba(0,0,0,0.1);
+            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
+            --radius: 8px;
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg-sec); color: var(--text); min-height: 100vh; }
+
+        .app-header { background: var(--primary); color: #fff; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: var(--shadow-md); }
+        .app-header h1 { font-size: 1.25rem; font-weight: 600; }
+        .app-header .version { font-size: 0.8rem; opacity: 0.8; }
+
+        .steps-bar { background: #fff; border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; gap: 4px; align-items: center; justify-content: center; flex-wrap: wrap; }
+        .step-ind { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 20px; font-size: 0.82rem; cursor: pointer; transition: all 0.2s; color: var(--text-sec); background: var(--bg-sec); border: 1px solid var(--border); }
+        .step-ind.active { background: var(--primary); color: #fff; border-color: var(--primary); font-weight: 600; }
+        .step-ind.done { background: var(--success-bg); color: var(--success); border-color: var(--success); }
+        .step-ind .num { font-weight: 700; }
+        .step-arrow { color: var(--border); font-size: 1.2rem; margin: 0 2px; }
+
+        .main-content { max-width: 1100px; margin: 20px auto; padding: 0 20px; }
+        .card { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; margin-bottom: 20px; }
+        .card h2 { font-size: 1.1rem; margin-bottom: 16px; color: var(--text); border-bottom: 2px solid var(--primary-light); padding-bottom: 8px; }
+        .step-section { display: none; }
+        .step-section.active { display: block; }
+
+        .btn { padding: 10px 20px; border: none; border-radius: var(--radius); cursor: pointer; font-size: 0.9rem; font-weight: 500; transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px; }
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-success { background: var(--success); color: #fff; }
+        .btn-success:hover { background: #15803d; }
+        .btn-outline { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
+        .btn-outline:hover { background: var(--primary-light); }
+        .btn-danger { background: var(--error); color: #fff; }
+        .btn-sm { padding: 6px 12px; font-size: 0.82rem; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-group { display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end; flex-wrap: wrap; }
+
+        .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 50px 24px; text-align: center; cursor: pointer; transition: all 0.2s; background: var(--bg-sec); }
+        .upload-zone:hover, .upload-zone.dragover { border-color: var(--primary); background: var(--primary-light); }
+        .upload-zone .icon { font-size: 2.5rem; margin-bottom: 12px; color: var(--primary); }
+        .upload-zone p { color: var(--text-sec); margin: 4px 0; }
+        .upload-zone input[type=file] { display: none; }
+
+        .tbl-wrap { overflow-x: auto; margin: 12px 0; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+        th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { background: var(--bg-sec); font-weight: 600; color: var(--text); position: sticky; top: 0; }
+        tr:hover { background: var(--primary-light); }
+        .scrollable-table { max-height: 400px; overflow-y: auto; }
+
+        .chk-wrap { display: flex; align-items: center; gap: 6px; }
+        input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--primary); }
+
+        .tag { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.78rem; font-weight: 500; }
+        .tag-success { background: var(--success-bg); color: var(--success); }
+        .tag-error { background: var(--error-bg); color: var(--error); }
+        .tag-warning { background: var(--warning-bg); color: var(--warning); }
+
+        .toast-container { position: fixed; top: 16px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; max-width: 420px; }
+        .toast { padding: 12px 18px; border-radius: var(--radius); box-shadow: var(--shadow-md); animation: slideIn 0.3s; font-size: 0.88rem; display: flex; justify-content: space-between; align-items: start; gap: 10px; }
+        .toast-success { background: var(--success-bg); color: #166534; border-left: 4px solid var(--success); }
+        .toast-error { background: var(--error-bg); color: #991b1b; border-left: 4px solid var(--error); }
+        .toast-warning { background: var(--warning-bg); color: #92400e; border-left: 4px solid var(--warning); }
+        .toast-info { background: var(--primary-light); color: #1e40af; border-left: 4px solid var(--info); }
+        .toast .close-btn { cursor: pointer; font-size: 1rem; line-height: 1; opacity: 0.6; background: none; border: none; color: inherit; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        .loading-overlay { position: fixed; inset: 0; background: rgba(255,255,255,0.75); z-index: 9990; display: none; align-items: center; justify-content: center; }
+        .loading-overlay.show { display: flex; }
+        .spinner { width: 44px; height: 44px; border: 4px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .app-footer { text-align: center; padding: 16px; font-size: 0.8rem; color: var(--text-sec); border-top: 1px solid var(--border); background: #fff; margin-top: 40px; }
+        .pa-status { display: inline-flex; align-items: center; gap: 6px; }
+        .pa-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .pa-dot.on { background: var(--success); }
+        .pa-dot.off { background: var(--error); }
+
+        .editor-toolbar { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px; background: var(--bg-sec); border: 1px solid var(--border); border-bottom: none; border-radius: var(--radius) var(--radius) 0 0; }
+        .editor-toolbar button { padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: #fff; cursor: pointer; font-size: 0.85rem; }
+        .editor-toolbar button:hover { background: var(--primary-light); }
+        .editor-toolbar select { padding: 4px; border: 1px solid var(--border); border-radius: 4px; font-size: 0.82rem; }
+        .editor-body { border: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); min-height: 200px; padding: 16px; outline: none; line-height: 1.6; overflow-y: auto; max-height: 400px; }
+        .editor-body:focus { border-color: var(--primary); }
+        .editor-body img { max-width: 100%; height: auto; }
+
+        .form-group { margin-bottom: 14px; }
+        .form-group label { display: block; font-weight: 500; margin-bottom: 4px; font-size: 0.88rem; }
+        .form-input { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.9rem; }
+        .form-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+
+        .preview-box { background: var(--bg-sec); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-top: 12px; }
+
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        @media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } }
+
+        .summary-cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+        .summary-card { flex: 1; min-width: 120px; padding: 14px; border-radius: var(--radius); text-align: center; }
+        .summary-card .val { font-size: 1.5rem; font-weight: 700; }
+        .summary-card .lbl { font-size: 0.78rem; color: var(--text-sec); margin-top: 2px; }
+    </style>
+</head>
+<body>
+    <div class="app-header">
+        <h1>Formacion Evaluation Splitter</h1>
+        <span class="version" id="appVersion">v1.0.0</span>
+    </div>
+
+    <div class="steps-bar" id="stepsBar"></div>
+
+    <div class="main-content">
+        <!-- Step 1: Upload -->
+        <div class="step-section active" id="step1">
+            <div class="card">
+                <h2>1. Cargar archivo Excel</h2>
+                <div class="upload-zone" id="uploadZone">
+                    <div class="icon">&#128196;</div>
+                    <p><strong>Arrastre el archivo .xlsx aqui</strong></p>
+                    <p>o haga clic para seleccionar</p>
+                    <input type="file" id="fileInput" accept=".xlsx">
+                </div>
+                <div id="fileInfo" style="margin-top:12px; display:none;">
+                    <p><strong>Archivo:</strong> <span id="fileName"></span></p>
+                    <p><strong>Tutores encontrados:</strong> <span id="tutorCount"></span></p>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-primary" id="btnNext1" disabled onclick="goStep(2)">Siguiente</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2: Column Selection -->
+        <div class="step-section" id="step2">
+            <div class="card">
+                <h2>2. Seleccion de columnas</h2>
+                <p style="color:var(--text-sec); margin-bottom:12px;">Seleccione las columnas que desea incluir en los archivos generados.</p>
+                <div class="chk-wrap" style="margin-bottom:10px;">
+                    <input type="checkbox" id="selectAllCols" checked onchange="toggleAllColumns(this.checked)">
+                    <label for="selectAllCols"><strong>Seleccionar todas</strong></label>
+                </div>
+                <div class="scrollable-table" id="columnsContainer"></div>
+                <div class="btn-group">
+                    <button class="btn btn-outline" onclick="goStep(1)">Anterior</button>
+                    <button class="btn btn-primary" onclick="saveColumns(); goStep(3)">Siguiente</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Review Groups -->
+        <div class="step-section" id="step3">
+            <div class="card">
+                <h2>3. Revisar grupos de tutores</h2>
+                <div id="groupsSummary"></div>
+                <div class="tbl-wrap">
+                    <table id="groupsTable">
+                        <thead><tr><th>Tutor</th><th>Profesionales</th></tr></thead>
+                        <tbody id="groupsBody"></tbody>
+                    </table>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-outline" onclick="goStep(2)">Anterior</button>
+                    <button class="btn btn-success" id="btnGenerate" onclick="generateFiles()">Generar archivos</button>
+                    <button class="btn btn-outline" id="btnDownloadZip" style="display:none" onclick="downloadZip()">Descargar ZIP</button>
+                    <button class="btn btn-primary" id="btnNext3" disabled onclick="goStep(4)">Siguiente</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 4: Contacts -->
+        <div class="step-section" id="step4">
+            <div class="card">
+                <h2>4. Mapeo de contactos</h2>
+                <div class="grid-2">
+                    <div>
+                        <div class="form-group">
+                            <label>Cargar archivo de contactos (.xlsx)</label>
+                            <input type="file" class="form-input" id="contactsFileInput" accept=".xlsx">
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="mapContacts()">Mapear contactos</button>
+                        <button class="btn btn-outline btn-sm" onclick="mapContacts(true)">Usar almacenados</button>
+                    </div>
+                    <div id="storedContactsInfo" style="font-size:0.88rem; color:var(--text-sec);"></div>
+                </div>
+                <div class="tbl-wrap" style="margin-top:16px;">
+                    <table id="contactsTable" style="display:none">
+                        <thead><tr><th>Tutor</th><th>Email</th><th>CC</th><th>Profesionales</th><th>Estado</th></tr></thead>
+                        <tbody id="contactsBody"></tbody>
+                    </table>
+                </div>
+                <div id="contactsDeleteSection" style="margin-top:12px; display:none;">
+                    <button class="btn btn-danger btn-sm" onclick="promptDeleteContacts()">Eliminar contactos almacenados</button>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-outline" onclick="goStep(3)">Anterior</button>
+                    <button class="btn btn-primary" id="btnNext4" disabled onclick="goStep(5)">Siguiente</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 5: Email Compose -->
+        <div class="step-section" id="step5">
+            <div class="card">
+                <h2>5. Componer email</h2>
+                <div class="form-group">
+                    <label>Asunto</label>
+                    <input type="text" class="form-input" id="emailSubject" value="Evaluacion Formacion -- {{tutor_name}}">
+                </div>
+                <div class="form-group">
+                    <label>Cuerpo del email</label>
+                    <div class="editor-toolbar" id="editorToolbar">
+                        <button onclick="execCmd('bold')" title="Negrita"><b>N</b></button>
+                        <button onclick="execCmd('italic')" title="Cursiva"><i>C</i></button>
+                        <button onclick="execCmd('underline')" title="Subrayado"><u>S</u></button>
+                        <select onchange="execCmd('fontSize', this.value); this.value='';" title="Tamano">
+                            <option value="">Tamano</option>
+                            <option value="1">Pequeno</option>
+                            <option value="3">Normal</option>
+                            <option value="5">Grande</option>
+                            <option value="7">Muy grande</option>
+                        </select>
+                        <input type="color" value="#000000" onchange="execCmd('foreColor', this.value)" title="Color de texto" style="width:30px;height:28px;border:1px solid var(--border);border-radius:4px;cursor:pointer;">
+                        <button onclick="execCmd('justifyLeft')" title="Izquierda">&#8676;</button>
+                        <button onclick="execCmd('justifyCenter')" title="Centro">&#8596;</button>
+                        <button onclick="execCmd('justifyRight')" title="Derecha">&#8677;</button>
+                        <button onclick="execCmd('insertUnorderedList')" title="Lista con vinetas">Lista</button>
+                        <button onclick="execCmd('insertOrderedList')" title="Lista numerada">1.Lista</button>
+                        <button onclick="insertImage()" title="Insertar imagen">Imagen</button>
+                        <button onclick="insertImageFile()" title="Insertar imagen desde archivo">Archivo</button>
+                        <button onclick="insertTable()" title="Insertar tabla">Tabla</button>
+                    </div>
+                    <div class="editor-body" id="emailBody" contenteditable="true"></div>
+                    <input type="file" id="imageFileInput" accept="image/*" style="display:none">
+                </div>
+                <p style="font-size:0.82rem; color:var(--text-sec); margin-top:6px;">
+                    Variables disponibles: <code>{{tutor_name}}</code>, <code>{{num_profesionales}}</code>, <code>{{fecha}}</code>, <code>{{periodo}}</code>
+                </p>
+                <div class="btn-group" style="justify-content: space-between;">
+                    <button class="btn btn-outline btn-sm" onclick="previewEmail()">Vista previa</button>
+                    <div style="display:flex; gap:10px;">
+                        <button class="btn btn-outline" onclick="goStep(4)">Anterior</button>
+                        <button class="btn btn-primary" onclick="saveTemplate(); goStep(6)">Siguiente</button>
+                    </div>
+                </div>
+                <div id="emailPreview" class="preview-box" style="display:none; margin-top:16px;"></div>
+            </div>
+        </div>
+
+        <!-- Step 6: Preview & Send -->
+        <div class="step-section" id="step6">
+            <div class="card">
+                <h2>6. Enviar emails</h2>
+                <div class="form-group">
+                    <label>CC adicional (separar con comas)</label>
+                    <input type="text" class="form-input" id="ccEmails" placeholder="email1@ejemplo.com, email2@ejemplo.com">
+                </div>
+                <div class="chk-wrap" style="margin-bottom:12px;">
+                    <input type="checkbox" id="testMode">
+                    <label for="testMode">Modo prueba (no envia realmente)</label>
+                </div>
+                <h3 style="font-size:0.95rem; margin-bottom:8px;">Destinatarios</h3>
+                <div class="tbl-wrap">
+                    <table id="sendTable">
+                        <thead><tr><th>Incluir</th><th>Tutor</th><th>Email</th><th>Profesionales</th><th>Estado</th></tr></thead>
+                        <tbody id="sendBody"></tbody>
+                    </table>
+                </div>
+                <div id="sendResults" style="display:none; margin-top:16px;"></div>
+                <div class="btn-group">
+                    <button class="btn btn-outline" onclick="goStep(5)">Anterior</button>
+                    <button class="btn btn-success" id="btnSend" onclick="sendEmails()">Enviar emails</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="app-footer">
+        <span class="pa-status">Power Automate: <span class="pa-dot" id="paDot"></span> <span id="paMsg">Verificando...</span></span>
+        &nbsp;|&nbsp; <span id="footerVersion">v1.0.0</span>
+    </div>
+
+    <div class="toast-container" id="toasts"></div>
+    <div class="loading-overlay" id="loadingOverlay"><div class="spinner"></div></div>
+
+    <script>
+    /* ── State ── */
+    let currentStep = 1;
+    const totalSteps = 6;
+    const stepNames = ['Cargar','Columnas','Revisar','Contactos','Email','Enviar'];
+    let parsedData = null;
+    let columnsData = [];
+    let mappingsData = [];
+
+    /* ── Init ── */
+    document.addEventListener('DOMContentLoaded', () => {
+        renderSteps();
+        initUpload();
+        initImageUpload();
+        loadHealth();
+        checkPowerAutomate();
+        checkStoredContacts();
+        loadDefaultTemplate();
+    });
+
+    function loadHealth() {
+        fetch('/health').then(r => r.json()).then(d => {
+            document.getElementById('appVersion').textContent = 'v' + d.version;
+            document.getElementById('footerVersion').textContent = 'v' + d.version;
+        }).catch(() => {});
+    }
+
+    function checkPowerAutomate() {
+        fetch('/api/power-automate/status').then(r => r.json()).then(d => {
+            document.getElementById('paDot').className = 'pa-dot ' + (d.available ? 'on' : 'off');
+            document.getElementById('paMsg').textContent = d.message;
+        }).catch(() => {
+            document.getElementById('paDot').className = 'pa-dot off';
+            document.getElementById('paMsg').textContent = 'No disponible';
+        });
+    }
+
+    function loadDefaultTemplate() {
+        fetch('/api/template').then(r => r.json()).then(d => {
+            document.getElementById('emailSubject').value = d.subject;
+            document.getElementById('emailBody').innerHTML = d.body;
+        }).catch(() => {});
+    }
+
+    /* ── Steps ── */
+    function renderSteps() {
+        const bar = document.getElementById('stepsBar');
+        bar.innerHTML = '';
+        for (let i = 1; i <= totalSteps; i++) {
+            if (i > 1) {
+                const a = document.createElement('span');
+                a.className = 'step-arrow';
+                a.textContent = '\u2192';
+                bar.appendChild(a);
+            }
+            const s = document.createElement('div');
+            s.className = 'step-ind' + (i === currentStep ? ' active' : '') + (i < currentStep ? ' done' : '');
+            s.innerHTML = '<span class="num">' + i + '</span> ' + stepNames[i - 1];
+            s.onclick = () => { if (i <= currentStep) goStep(i); };
+            bar.appendChild(s);
+        }
+    }
+
+    function goStep(n) {
+        if (n < 1 || n > totalSteps) return;
+        document.getElementById('step' + currentStep).classList.remove('active');
+        currentStep = n;
+        document.getElementById('step' + currentStep).classList.add('active');
+        renderSteps();
+        if (n === 4) checkStoredContacts();
+        if (n === 6) renderSendTable();
+    }
+
+    /* ── Notifications ── */
+    function showNotification(msg, type) {
+        type = type || 'info';
+        const c = document.getElementById('toasts');
+        const t = document.createElement('div');
+        t.className = 'toast toast-' + type;
+        t.innerHTML = '<span>' + msg + '</span><button class="close-btn" onclick="this.parentElement.remove()">&times;</button>';
+        c.appendChild(t);
+        setTimeout(() => { if (t.parentElement) t.remove(); }, 5000);
+    }
+
+    function showLoading(show) {
+        document.getElementById('loadingOverlay').classList.toggle('show', show);
+    }
+
+    /* ── API helper ── */
+    async function apiCall(endpoint, options) {
+        options = options || {};
+        showLoading(true);
+        try {
+            const r = await fetch(endpoint, options);
+            if (!r.ok) {
+                let detail = 'Error desconocido';
+                try {
+                    const e = await r.json();
+                    detail = e.detail || detail;
+                } catch (x) {}
+                throw new Error(detail);
+            }
+            return await r.json();
+        } catch (e) {
+            showNotification(e.message, 'error');
+            throw e;
+        } finally {
+            showLoading(false);
+        }
+    }
+
+    /* ── Upload ── */
+    function initUpload() {
+        const zone = document.getElementById('uploadZone');
+        const inp = document.getElementById('fileInput');
+        zone.onclick = () => inp.click();
+        zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+        zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+        zone.addEventListener('drop', e => {
+            e.preventDefault();
+            zone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+        });
+        inp.addEventListener('change', () => { if (inp.files.length) handleFile(inp.files[0]); });
+    }
+
+    async function handleFile(file) {
+        if (!file.name.endsWith('.xlsx')) {
+            showNotification('Solo se permiten archivos .xlsx', 'error');
+            return;
+        }
+        const fd = new FormData();
+        fd.append('file', file);
+        try {
+            parsedData = await apiCall('/api/parse?mode=tutor', { method: 'POST', body: fd });
+            document.getElementById('fileName').textContent = parsedData.filename;
+            document.getElementById('tutorCount').textContent = parsedData.groups_count;
+            document.getElementById('fileInfo').style.display = 'block';
+            document.getElementById('btnNext1').disabled = false;
+            renderColumns();
+            renderGroups();
+            showNotification('Archivo analizado: ' + parsedData.groups_count + ' tutores encontrados', 'success');
+        } catch (e) {}
+    }
+
+    /* ── Columns ── */
+    function renderColumns() {
+        if (!parsedData) return;
+        columnsData = parsedData.all_columns.map(c => ({ letter: c.letter, header: c.header, category: c.category, selected: true }));
+        const container = document.getElementById('columnsContainer');
+        const cats = {};
+        columnsData.forEach((c, i) => {
+            const cat = c.category || '(General)';
+            if (!cats[cat]) cats[cat] = [];
+            cats[cat].push({ col: c, idx: i });
+        });
+        let html = '<table><thead><tr><th style="width:40px"></th><th>Categoria</th><th>Columna</th><th>Letra</th></tr></thead><tbody>';
+        for (const cat in cats) {
+            const cols = cats[cat];
+            const catEsc = cat.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            html += '<tr class="cat-header" onclick="toggleCategory(\'' + catEsc + '\')">'
+                + '<td><input type="checkbox" checked onchange="toggleCategoryCheck(\'' + catEsc + '\', this.checked); event.stopPropagation();" data-cat="' + cat + '"></td>'
+                + '<td colspan="3"><strong>' + cat + '</strong> (' + cols.length + ' columnas)</td></tr>';
+            for (const item of cols) {
+                html += '<tr data-catgroup="' + cat + '">'
+                    + '<td><input type="checkbox" checked onchange="columnsData[' + item.idx + '].selected=this.checked" data-colidx="' + item.idx + '"></td>'
+                    + '<td style="color:var(--text-sec)">' + cat + '</td>'
+                    + '<td>' + (item.col.header || '\u2014') + '</td>'
+                    + '<td><code>' + item.col.letter + '</code></td></tr>';
+            }
+        }
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    }
+
+    function toggleAllColumns(checked) {
+        columnsData.forEach(c => { c.selected = checked; });
+        document.querySelectorAll('#columnsContainer input[type=checkbox]').forEach(cb => { cb.checked = checked; });
+    }
+
+    function toggleCategoryCheck(cat, checked) {
+        document.querySelectorAll('#columnsContainer tr[data-catgroup="' + cat + '"] input[type=checkbox]').forEach(cb => {
+            cb.checked = checked;
+            const idx = parseInt(cb.dataset.colidx);
+            if (!isNaN(idx)) columnsData[idx].selected = checked;
+        });
+    }
+
+    function toggleCategory(cat) {
+        document.querySelectorAll('#columnsContainer tr[data-catgroup="' + cat + '"]').forEach(tr => {
+            tr.style.display = tr.style.display === 'none' ? '' : 'none';
+        });
+    }
+
+    async function saveColumns() {
+        const selected = columnsData.filter(c => c.selected).map(c => c.letter);
+        if (selected.length === 0) {
+            showNotification('Debe seleccionar al menos una columna', 'warning');
+            return;
+        }
+        try {
+            await apiCall('/api/set-columns', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ columns: selected })
+            });
+        } catch (e) {}
+    }
+
+    /* ── Groups ── */
+    function renderGroups() {
+        if (!parsedData) return;
+        const tbody = document.getElementById('groupsBody');
+        tbody.innerHTML = '';
+        let totalProfs = 0;
+        parsedData.groups.forEach(g => {
+            totalProfs += g.entries_count;
+            tbody.innerHTML += '<tr><td>' + g.name + '</td><td>' + g.entries_count + '</td></tr>';
+        });
+        document.getElementById('groupsSummary').innerHTML =
+            '<div class="summary-cards">'
+            + '<div class="summary-card" style="background:var(--primary-light)"><div class="val">' + parsedData.groups_count + '</div><div class="lbl">Tutores</div></div>'
+            + '<div class="summary-card" style="background:var(--success-bg)"><div class="val">' + totalProfs + '</div><div class="lbl">Profesionales</div></div>'
+            + '</div>';
+    }
+
+    async function generateFiles() {
+        try {
+            const result = await apiCall('/api/generate-files', { method: 'POST' });
+            document.getElementById('btnNext3').disabled = false;
+            document.getElementById('btnDownloadZip').style.display = 'inline-flex';
+            showNotification(result.files_generated + ' archivos generados', 'success');
+        } catch (e) {}
+    }
+
+    function downloadZip() {
+        window.location.href = '/api/download-zip';
+    }
+
+    /* ── Contacts ── */
+    async function checkStoredContacts() {
+        try {
+            const info = await fetch('/api/contacts/stored').then(r => r.json());
+            const div = document.getElementById('storedContactsInfo');
+            if (info.has_stored) {
+                div.innerHTML = '<p>Contactos almacenados: <strong>' + info.count + '</strong></p><p>Ultima actualizacion: ' + (info.last_updated || '\u2014') + '</p>';
+                document.getElementById('contactsDeleteSection').style.display = 'block';
+            } else {
+                div.innerHTML = '<p>No hay contactos almacenados.</p>';
+                document.getElementById('contactsDeleteSection').style.display = 'none';
+            }
+        } catch (e) {}
+    }
+
+    async function mapContacts(useStored) {
+        try {
+            let options = { method: 'POST' };
+            if (!useStored) {
+                const inp = document.getElementById('contactsFileInput');
+                if (inp.files.length) {
+                    const fd = new FormData();
+                    fd.append('contacts_file', inp.files[0]);
+                    options.body = fd;
+                }
+            }
+            const result = await apiCall('/api/map-contacts', options);
+            mappingsData = result.mappings;
+            document.getElementById('btnNext4').disabled = false;
+            renderContactsTable();
+            checkStoredContacts();
+            if (result.unmapped_count > 0) {
+                showNotification(result.unmapped_count + ' tutor(es) sin email asignado', 'warning');
+            } else {
+                showNotification('Todos los tutores mapeados correctamente', 'success');
+            }
+        } catch (e) {}
+    }
+
+    function renderContactsTable() {
+        const table = document.getElementById('contactsTable');
+        const tbody = document.getElementById('contactsBody');
+        table.style.display = 'table';
+        tbody.innerHTML = '';
+        mappingsData.forEach(m => {
+            const status = m.email_found
+                ? '<span class="tag tag-success">Mapeado</span>'
+                : '<span class="tag tag-error">Sin email</span>';
+            tbody.innerHTML += '<tr><td>' + m.name + '</td><td>' + (m.email || '\u2014') + '</td><td>' + (m.email_cc || '\u2014') + '</td><td>' + (m.entries_count || '\u2014') + '</td><td>' + status + '</td></tr>';
+        });
+    }
+
+    async function promptDeleteContacts() {
+        const pw = prompt('Introduzca la contrasena para eliminar contactos:');
+        if (!pw) return;
+        try {
+            await apiCall('/api/contacts/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: pw })
+            });
+            showNotification('Contactos eliminados', 'success');
+            checkStoredContacts();
+        } catch (e) {}
+    }
+
+    /* ── Email Editor ── */
+    function execCmd(cmd, val) {
+        document.execCommand(cmd, false, val || null);
+        document.getElementById('emailBody').focus();
+    }
+
+    function insertImage() {
+        const url = prompt('URL de la imagen:');
+        if (url) execCmd('insertImage', url);
+    }
+
+    function initImageUpload() {
+        document.getElementById('imageFileInput').addEventListener('change', function () {
+            if (this.files.length) {
+                const reader = new FileReader();
+                reader.onload = function (e) {
+                    execCmd('insertImage', e.target.result);
+                };
+                reader.readAsDataURL(this.files[0]);
+            }
+        });
+    }
+
+    function insertImageFile() {
+        document.getElementById('imageFileInput').click();
+    }
+
+    function insertTable() {
+        const rows = parseInt(prompt('Numero de filas:', '3')) || 3;
+        const cols = parseInt(prompt('Numero de columnas:', '3')) || 3;
+        let html = '<table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse;width:100%">';
+        for (let r = 0; r < rows; r++) {
+            html += '<tr>';
+            for (let c = 0; c < cols; c++) {
+                html += r === 0 ? '<th style="background:#f0f0f0;padding:6px">&nbsp;</th>' : '<td style="padding:6px">&nbsp;</td>';
+            }
+            html += '</tr>';
+        }
+        html += '</table><br>';
+        execCmd('insertHTML', html);
+    }
+
+    async function saveTemplate() {
+        const subject = document.getElementById('emailSubject').value;
+        const body = document.getElementById('emailBody').innerHTML;
+        try {
+            await apiCall('/api/template', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ subject: subject, body: body, is_html: true })
+            });
+        } catch (e) {}
+    }
+
+    async function previewEmail() {
+        if (!mappingsData.length) {
+            showNotification('Primero debe mapear contactos', 'warning');
+            return;
+        }
+        await saveTemplate();
+        const code = mappingsData[0].code;
+        try {
+            const preview = await apiCall('/api/preview-email?code=' + encodeURIComponent(code));
+            const div = document.getElementById('emailPreview');
+            div.style.display = 'block';
+            div.innerHTML = '<p><strong>Para:</strong> ' + preview.to + '</p>'
+                + '<p><strong>CC:</strong> ' + (preview.cc.join(', ') || '\u2014') + '</p>'
+                + '<p><strong>Asunto:</strong> ' + preview.subject + '</p>'
+                + '<hr style="margin:8px 0">' + preview.body;
+        } catch (e) {}
+    }
+
+    /* ── Send ── */
+    function renderSendTable() {
+        const tbody = document.getElementById('sendBody');
+        tbody.innerHTML = '';
+        mappingsData.forEach(m => {
+            const status = m.email_found
+                ? '<span class="tag tag-success">Listo</span>'
+                : '<span class="tag tag-error">Sin email</span>';
+            tbody.innerHTML += '<tr>'
+                + '<td><input type="checkbox" ' + (m.email_found ? 'checked' : '') + ' data-code="' + m.code + '" ' + (m.email_found ? '' : 'disabled') + '></td>'
+                + '<td>' + m.name + '</td>'
+                + '<td>' + (m.email || '\u2014') + '</td>'
+                + '<td>' + (m.entries_count || '\u2014') + '</td>'
+                + '<td>' + status + '</td></tr>';
+        });
+    }
+
+    async function sendEmails() {
+        const excluded = [];
+        document.querySelectorAll('#sendBody input[type=checkbox]').forEach(cb => {
+            if (!cb.checked && cb.dataset.code) excluded.push(cb.dataset.code);
+        });
+        const ccRaw = document.getElementById('ccEmails').value;
+        const ccEmails = ccRaw ? ccRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+        const testMode = document.getElementById('testMode').checked;
+
+        await saveTemplate();
+
+        try {
+            const result = await apiCall('/api/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ excluded_codes: excluded, cc_emails: ccEmails, test_mode: testMode })
+            });
+            renderSendResults(result);
+            showNotification(
+                'Enviados: ' + result.success + ' / Fallidos: ' + result.failed + ' / Excluidos: ' + result.excluded,
+                result.failed > 0 ? 'warning' : 'success'
+            );
+        } catch (e) {}
+    }
+
+    function renderSendResults(result) {
+        const div = document.getElementById('sendResults');
+        div.style.display = 'block';
+        let html = '<div class="summary-cards">'
+            + '<div class="summary-card" style="background:var(--success-bg)"><div class="val">' + result.success + '</div><div class="lbl">Enviados</div></div>'
+            + '<div class="summary-card" style="background:var(--error-bg)"><div class="val">' + result.failed + '</div><div class="lbl">Fallidos</div></div>'
+            + '<div class="summary-card" style="background:var(--warning-bg)"><div class="val">' + result.excluded + '</div><div class="lbl">Excluidos</div></div>'
+            + '</div>';
+        html += '<table><thead><tr><th>Tutor</th><th>Email</th><th>Estado</th><th>Mensaje</th></tr></thead><tbody>';
+        result.results.forEach(r => {
+            const cls = r.status === 'success' ? 'tag-success' : (r.status === 'excluded' ? 'tag-warning' : 'tag-error');
+            html += '<tr><td>' + r.name + '</td><td>' + (r.email || '\u2014') + '</td><td><span class="tag ' + cls + '">' + r.status + '</span></td><td>' + (r.message || '') + '</td></tr>';
+        });
+        html += '</tbody></table>';
+        div.innerHTML = html;
+    }
+    </script>
+</body>
+</html>

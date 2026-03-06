@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            font-family: Calibri, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 650px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            border-bottom: 3px solid #1E3A5F;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+        .header h2 {
+            color: #1E3A5F;
+            margin: 0;
+            font-size: 18px;
+        }
+        .content p {
+            margin: 10px 0;
+        }
+        .info-box {
+            background-color: #f0f4f8;
+            border-left: 4px solid #1E3A5F;
+            padding: 12px 16px;
+            margin: 15px 0;
+        }
+        .info-box strong {
+            color: #1E3A5F;
+        }
+        .footer {
+            margin-top: 30px;
+            padding-top: 15px;
+            border-top: 1px solid #ddd;
+            font-size: 0.9em;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Evaluaci&oacute;n de Competencia de Calidad</h2>
+        </div>
+
+        <div class="content">
+            <p>Estimado/a <strong>{{tutor_name}}</strong>,</p>
+
+            <p>Adjunto encontrar&aacute; el resumen de calificaciones de los profesionales
+            a su cargo correspondiente al periodo de evaluaci&oacute;n actual.</p>
+
+            <div class="info-box">
+                <p><strong>Profesionales evaluados:</strong> {{num_profesionales}}</p>
+                <p><strong>Fecha:</strong> {{fecha}}</p>
+                <p><strong>Periodo:</strong> {{periodo}}</p>
+            </div>
+
+            <p>Por favor, revise la informaci&oacute;n y no dude en contactarnos
+            si tiene alguna consulta.</p>
+
+            <div class="footer">
+                <p>Saludos cordiales,</p>
+                <p><strong>Departamento de Calidad</strong></p>
+                <p><em>Este es un mensaje autom&aacute;tico generado por el sistema de
+                gesti&oacute;n de formaci&oacute;n.</em></p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

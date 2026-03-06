@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  formacion-app:
+    build: .
+    container_name: formacion-evaluation-splitter
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8002
+    restart: unless-stopped
