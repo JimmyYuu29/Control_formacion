@@ -12,6 +12,7 @@ A partir de un archivo Excel de resumen de calificaciones, la app divide el arch
 - **División por Tutor** — Identifica la columna "Tutor" y agrupa los datos automáticamente
 - **Selección de columnas** — Permite elegir qué columnas incluir, con vista previa de datos de ejemplo
 - **Preservación de formato** — Los archivos generados mantienen colores, fuentes, bordes, anchos de columna, alturas de fila y celdas combinadas del original
+- **Capturas de alta fidelidad** — Generación de PNG desde Excel vía LibreOffice + PyMuPDF, preservando todos los estilos, colores y valores calculados de fórmulas
 - **Matching de contactos** — Coincidencia exacta, sin acentos (NFKD) y por tokens parciales
 - **Editor de email rico** — Negrita, cursiva, color, imágenes inline, tablas, listas
 - **Envío vía Power Automate** — HTTP POST con adjuntos Base64, modo test incluido
@@ -22,6 +23,10 @@ A partir de un archivo Excel de resumen de calificaciones, la app divide el arch
 ## Requisitos
 
 - Python ≥ 3.9
+- **LibreOffice** (para generación de capturas de pantalla PNG desde archivos Excel)
+  - Windows: Descargar desde [libreoffice.org](https://www.libreoffice.org/download/)
+  - Linux: `apt-get install libreoffice-calc`
+  - Docker: Se instala automáticamente (ver Dockerfile)
 - Power Automate flow configurado para envío de emails (ver [Configuración de Power Automate](#configuración-de-power-automate))
 
 ---
@@ -318,6 +323,7 @@ Control_formacion/
 |------------|-----------|
 | Backend | Python 3.9+ / FastAPI |
 | Excel | openpyxl |
+| Capturas PNG | LibreOffice (headless) + PyMuPDF |
 | Validación | Pydantic v2 |
 | Email | Power Automate (HTTP POST) |
 | Frontend | HTML5 + CSS + Vanilla JavaScript |

@@ -6,6 +6,7 @@ python-multipart>=0.0.6
 # Excel Processing
 openpyxl>=3.1.2
 Pillow>=10.0.0
+PyMuPDF>=1.24.0  # PDF→PNG rendering for screenshots (requires LibreOffice installed on system)
 
 # HTTP Client (Power Automate integration)
 requests>=2.31.0

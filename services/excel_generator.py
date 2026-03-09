@@ -1,7 +1,11 @@
 """Excel generator service for creating individual files per Tutor."""
 
 import logging
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import zipfile
 from copy import copy
 from io import BytesIO
@@ -294,174 +298,196 @@ class ExcelGenerator:
         return screenshots
 
     def _render_excel_to_png(self, file_content: bytes) -> bytes:
-        """Render Excel file content as a PNG image using Pillow."""
-        from PIL import Image, ImageDraw
+        """Render Excel file content as a PNG image.
 
-        wb = load_workbook(BytesIO(file_content))
-        ws = wb.active
+        Uses LibreOffice in headless mode to convert Excel → PDF,
+        then PyMuPDF (fitz) to render the PDF page(s) as a high-quality PNG.
+        This preserves all original formatting: colors, borders, merged
+        cells, fonts, and displays computed formula values.
 
-        max_row = min(ws.max_row or 1, 100)
-        max_col = min(ws.max_column or 1, 30)
+        Before conversion, the sheet's page setup is adjusted to landscape
+        orientation with fit-to-width scaling so that wide spreadsheets are
+        not truncated across multiple PDF pages.
+        """
+        import fitz  # PyMuPDF
+        from PIL import Image
 
-        PADDING = 4
-        MARGIN = 10
-        DEFAULT_COL_WIDTH = 80
-        DEFAULT_ROW_HEIGHT = 24
-        FONT_SIZE = 11
+        soffice = self._find_libreoffice()
+        if not soffice:
+            raise RuntimeError(
+                "LibreOffice no encontrado. Instálelo para generar capturas. "
+                "https://www.libreoffice.org/download/"
+            )
 
-        # Calculate column widths in pixels
-        col_widths = []
-        for col_idx in range(1, max_col + 1):
-            letter = get_column_letter(col_idx)
-            dim = ws.column_dimensions.get(letter)
-            if dim and dim.width and dim.width > 0:
-                px = max(int(dim.width * 7.5), 40)
-                col_widths.append(min(px, 300))
+        tmpdir = tempfile.mkdtemp(prefix="formacion_screenshot_")
+        try:
+            # 1. Pre-process: set page layout to landscape + fit-to-width
+            prepared_content = self._prepare_xlsx_for_export(file_content)
+
+            xlsx_path = os.path.join(tmpdir, "input.xlsx")
+            with open(xlsx_path, "wb") as f:
+                f.write(prepared_content)
+
+            # 2. Convert XLSX → PDF via LibreOffice headless
+            cmd = [
+                soffice,
+                "--headless",
+                "--calc",
+                "--convert-to", "pdf",
+                "--outdir", tmpdir,
+                xlsx_path,
+            ]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    "LibreOffice conversion failed: %s", result.stderr
+                )
+                raise RuntimeError(
+                    f"LibreOffice conversion failed: {result.stderr}"
+                )
+
+            pdf_path = os.path.join(tmpdir, "input.pdf")
+            if not os.path.exists(pdf_path):
+                raise RuntimeError(
+                    "PDF output not found after LibreOffice conversion"
+                )
+
+            # 3. Render PDF pages as PNG via PyMuPDF
+            doc = fitz.open(pdf_path)
+            zoom = 4.0  # 400 DPI equivalent for maximum resolution output
+            mat = fitz.Matrix(zoom, zoom)
+
+            if doc.page_count == 1:
+                # Single page — render directly
+                page = doc.load_page(0)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                png_bytes = pix.tobytes("png")
             else:
-                col_widths.append(DEFAULT_COL_WIDTH)
+                # Multiple pages — stitch vertically into one image
+                page_images = []
+                for page_num in range(doc.page_count):
+                    page = doc.load_page(page_num)
+                    pix = page.get_pixmap(matrix=mat, alpha=False)
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    page_images.append(img)
 
-        # Calculate row heights in pixels
-        row_heights = []
-        for row_idx in range(1, max_row + 1):
-            dim = ws.row_dimensions.get(row_idx)
-            if dim and dim.height and dim.height > 0:
-                px = max(int(dim.height * 1.33), 18)
-                row_heights.append(px)
-            else:
-                row_heights.append(DEFAULT_ROW_HEIGHT)
+                total_width = max(img.width for img in page_images)
+                total_height = sum(img.height for img in page_images)
+                combined = Image.new("RGB", (total_width, total_height), "white")
 
-        total_w = sum(col_widths) + MARGIN * 2
-        total_h = sum(row_heights) + MARGIN * 2
+                y_offset = 0
+                for img in page_images:
+                    combined.paste(img, (0, y_offset))
+                    y_offset += img.height
 
-        img = Image.new("RGB", (total_w, total_h), "#FFFFFF")
-        draw = ImageDraw.Draw(img)
+                buffer = BytesIO()
+                combined.save(buffer, format="PNG", optimize=True)
+                buffer.seek(0)
+                png_bytes = buffer.read()
 
-        font = self._get_pil_font(FONT_SIZE, bold=False)
-        font_bold = self._get_pil_font(FONT_SIZE, bold=True)
+            doc.close()
 
-        # Identify merged cells
-        merged_map: Dict = {}
-        for merge_range in ws.merged_cells.ranges:
-            for r in range(merge_range.min_row, merge_range.max_row + 1):
-                for c in range(merge_range.min_col, merge_range.max_col + 1):
-                    if r <= max_row and c <= max_col:
-                        if r == merge_range.min_row and c == merge_range.min_col:
-                            rs = min(merge_range.max_row, max_row) - r + 1
-                            cs = min(merge_range.max_col, max_col) - c + 1
-                            merged_map[(r, c)] = (rs, cs)
-                        else:
-                            merged_map[(r, c)] = None
+            # 4. Auto-crop whitespace around the content
+            png_bytes = self._crop_whitespace(png_bytes)
 
-        # Draw cells
-        y = MARGIN
-        for row_idx in range(1, max_row + 1):
-            x = MARGIN
-            rh = row_heights[row_idx - 1]
-            for col_idx in range(1, max_col + 1):
-                w = col_widths[col_idx - 1]
+            return png_bytes
 
-                merge_info = merged_map.get((row_idx, col_idx), "normal")
-                if merge_info is None:
-                    x += w
-                    continue
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
-                cell_w = w
-                cell_h = rh
-                if isinstance(merge_info, tuple):
-                    rs, cs = merge_info
-                    cell_w = sum(col_widths[col_idx - 1 : col_idx - 1 + cs])
-                    cell_h = sum(row_heights[row_idx - 1 : row_idx - 1 + rs])
+    @staticmethod
+    def _crop_whitespace(png_bytes: bytes, padding: int = 10) -> bytes:
+        """Remove excess whitespace around the content in a PNG image.
 
-                cell = ws.cell(row=row_idx, column=col_idx)
+        Detects the bounding box of non-white content and crops with
+        a small padding to produce a tight, clean screenshot.
+        """
+        from PIL import Image, ImageChops
 
-                # Background
-                fill_color = "#FFFFFF"
-                try:
-                    if cell.fill and cell.fill.start_color:
-                        rgb = cell.fill.start_color.rgb
-                        if (
-                            rgb
-                            and isinstance(rgb, str)
-                            and len(rgb) >= 6
-                            and rgb != "00000000"
-                        ):
-                            fill_color = "#" + rgb[-6:]
-                except Exception:
-                    pass
+        img = Image.open(BytesIO(png_bytes)).convert("RGB")
 
-                rect = [x, y, x + cell_w - 1, y + cell_h - 1]
-                draw.rectangle(rect, fill=fill_color)
-                draw.rectangle(rect, outline="#CCCCCC")
+        # Create a white background and diff to find content
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        diff = ImageChops.difference(img, bg)
+        bbox = diff.getbbox()
 
-                # Text
-                value = cell.value
-                if value is not None:
-                    text = str(value)
-                    if len(text) > 50:
-                        text = text[:47] + "..."
-
-                    is_bold = bool(cell.font and cell.font.bold)
-                    text_font = font_bold if is_bold else font
-
-                    text_color = "#000000"
-                    try:
-                        if cell.font and cell.font.color and cell.font.color.rgb:
-                            tc = cell.font.color.rgb
-                            if (
-                                isinstance(tc, str)
-                                and len(tc) >= 6
-                                and tc != "00000000"
-                            ):
-                                text_color = "#" + tc[-6:]
-                    except Exception:
-                        pass
-
-                    text_x = x + PADDING
-                    text_y = y + (rh - FONT_SIZE) // 2
-
-                    try:
-                        if cell.alignment:
-                            if cell.alignment.horizontal == "center":
-                                bbox = draw.textbbox((0, 0), text, font=text_font)
-                                tw = bbox[2] - bbox[0]
-                                text_x = x + (cell_w - tw) // 2
-                            elif cell.alignment.horizontal == "right":
-                                bbox = draw.textbbox((0, 0), text, font=text_font)
-                                tw = bbox[2] - bbox[0]
-                                text_x = x + cell_w - tw - PADDING
-                    except Exception:
-                        pass
-
-                    draw.text(
-                        (text_x, text_y), text, fill=text_color, font=text_font
-                    )
-
-                x += w
-            y += rh
+        if bbox:
+            # Add padding around the content
+            left = max(0, bbox[0] - padding)
+            top = max(0, bbox[1] - padding)
+            right = min(img.width, bbox[2] + padding)
+            bottom = min(img.height, bbox[3] + padding)
+            img = img.crop((left, top, right, bottom))
 
         buffer = BytesIO()
         img.save(buffer, format="PNG", optimize=True)
         buffer.seek(0)
-        wb.close()
         return buffer.read()
 
     @staticmethod
-    def _get_pil_font(size: int = 11, bold: bool = False):
-        """Get a PIL font, trying system fonts first."""
-        from PIL import ImageFont
+    def _prepare_xlsx_for_export(file_content: bytes) -> bytes:
+        """Adjust the XLSX page setup so LibreOffice exports all content.
 
-        if bold:
-            names = ["arialbd.ttf", "calibrib.ttf", "DejaVuSans-Bold.ttf"]
-        else:
-            names = ["arial.ttf", "calibri.ttf", "DejaVuSans.ttf"]
+        Sets landscape orientation, removes margins, and configures
+        fit-to-width so wide spreadsheets are not truncated.
+        """
+        from openpyxl.worksheet.page import PageMargins
 
-        for name in names:
-            try:
-                return ImageFont.truetype(name, size)
-            except (OSError, IOError):
-                pass
+        wb = load_workbook(BytesIO(file_content))
+        ws = wb.active
 
-        try:
-            return ImageFont.load_default(size)
-        except TypeError:
-            return ImageFont.load_default()
+        # Landscape orientation
+        ws.page_setup.orientation = "landscape"
+
+        # Fit all columns onto one page width (height can span pages)
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+        # Minimal margins
+        ws.page_margins = PageMargins(
+            left=0.2, right=0.2, top=0.2, bottom=0.2,
+            header=0.1, footer=0.1
+        )
+
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        wb.close()
+        return buf.read()
+
+    @staticmethod
+    def _find_libreoffice() -> Optional[str]:
+        """Locate the LibreOffice (soffice) executable.
+
+        Searches common installation paths on Windows, Linux, and macOS.
+        Returns the path to the executable, or None if not found.
+        """
+        # 1. Check if soffice / libreoffice is on PATH
+        for name in ("soffice", "libreoffice"):
+            path = shutil.which(name)
+            if path:
+                return path
+
+        # 2. Check common installation directories
+        candidates = [
+            # Windows
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+            # Linux
+            "/usr/bin/libreoffice",
+            "/usr/bin/soffice",
+            "/usr/lib/libreoffice/program/soffice",
+            # macOS
+            "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+        ]
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                return candidate
+
+        return None
