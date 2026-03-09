@@ -266,3 +266,202 @@ class ExcelGenerator:
                 zf.writestr(filename, content)
         buffer.seek(0)
         return buffer.read()
+
+    # ── Screenshot Generation ────────────────────────────────────────
+
+    def generate_screenshots(
+        self, files: List[Tuple[str, bytes]]
+    ) -> List[Tuple[str, bytes]]:
+        """Generate PNG screenshots for each generated Excel file.
+
+        Args:
+            files: List of (filename, content_bytes) from generate_files
+
+        Returns:
+            List of (png_filename, png_bytes) tuples
+        """
+        screenshots: List[Tuple[str, bytes]] = []
+        for filename, content in files:
+            try:
+                png_name = filename.replace(".xlsx", ".png")
+                png_content = self._render_excel_to_png(content)
+                screenshots.append((png_name, png_content))
+            except Exception as e:
+                logger.error(
+                    "Error generando captura para %s: %s", filename, str(e)
+                )
+        logger.info("Generadas %d capturas de pantalla", len(screenshots))
+        return screenshots
+
+    def _render_excel_to_png(self, file_content: bytes) -> bytes:
+        """Render Excel file content as a PNG image using Pillow."""
+        from PIL import Image, ImageDraw
+
+        wb = load_workbook(BytesIO(file_content))
+        ws = wb.active
+
+        max_row = min(ws.max_row or 1, 100)
+        max_col = min(ws.max_column or 1, 30)
+
+        PADDING = 4
+        MARGIN = 10
+        DEFAULT_COL_WIDTH = 80
+        DEFAULT_ROW_HEIGHT = 24
+        FONT_SIZE = 11
+
+        # Calculate column widths in pixels
+        col_widths = []
+        for col_idx in range(1, max_col + 1):
+            letter = get_column_letter(col_idx)
+            dim = ws.column_dimensions.get(letter)
+            if dim and dim.width and dim.width > 0:
+                px = max(int(dim.width * 7.5), 40)
+                col_widths.append(min(px, 300))
+            else:
+                col_widths.append(DEFAULT_COL_WIDTH)
+
+        # Calculate row heights in pixels
+        row_heights = []
+        for row_idx in range(1, max_row + 1):
+            dim = ws.row_dimensions.get(row_idx)
+            if dim and dim.height and dim.height > 0:
+                px = max(int(dim.height * 1.33), 18)
+                row_heights.append(px)
+            else:
+                row_heights.append(DEFAULT_ROW_HEIGHT)
+
+        total_w = sum(col_widths) + MARGIN * 2
+        total_h = sum(row_heights) + MARGIN * 2
+
+        img = Image.new("RGB", (total_w, total_h), "#FFFFFF")
+        draw = ImageDraw.Draw(img)
+
+        font = self._get_pil_font(FONT_SIZE, bold=False)
+        font_bold = self._get_pil_font(FONT_SIZE, bold=True)
+
+        # Identify merged cells
+        merged_map: Dict = {}
+        for merge_range in ws.merged_cells.ranges:
+            for r in range(merge_range.min_row, merge_range.max_row + 1):
+                for c in range(merge_range.min_col, merge_range.max_col + 1):
+                    if r <= max_row and c <= max_col:
+                        if r == merge_range.min_row and c == merge_range.min_col:
+                            rs = min(merge_range.max_row, max_row) - r + 1
+                            cs = min(merge_range.max_col, max_col) - c + 1
+                            merged_map[(r, c)] = (rs, cs)
+                        else:
+                            merged_map[(r, c)] = None
+
+        # Draw cells
+        y = MARGIN
+        for row_idx in range(1, max_row + 1):
+            x = MARGIN
+            rh = row_heights[row_idx - 1]
+            for col_idx in range(1, max_col + 1):
+                w = col_widths[col_idx - 1]
+
+                merge_info = merged_map.get((row_idx, col_idx), "normal")
+                if merge_info is None:
+                    x += w
+                    continue
+
+                cell_w = w
+                cell_h = rh
+                if isinstance(merge_info, tuple):
+                    rs, cs = merge_info
+                    cell_w = sum(col_widths[col_idx - 1 : col_idx - 1 + cs])
+                    cell_h = sum(row_heights[row_idx - 1 : row_idx - 1 + rs])
+
+                cell = ws.cell(row=row_idx, column=col_idx)
+
+                # Background
+                fill_color = "#FFFFFF"
+                try:
+                    if cell.fill and cell.fill.start_color:
+                        rgb = cell.fill.start_color.rgb
+                        if (
+                            rgb
+                            and isinstance(rgb, str)
+                            and len(rgb) >= 6
+                            and rgb != "00000000"
+                        ):
+                            fill_color = "#" + rgb[-6:]
+                except Exception:
+                    pass
+
+                rect = [x, y, x + cell_w - 1, y + cell_h - 1]
+                draw.rectangle(rect, fill=fill_color)
+                draw.rectangle(rect, outline="#CCCCCC")
+
+                # Text
+                value = cell.value
+                if value is not None:
+                    text = str(value)
+                    if len(text) > 50:
+                        text = text[:47] + "..."
+
+                    is_bold = bool(cell.font and cell.font.bold)
+                    text_font = font_bold if is_bold else font
+
+                    text_color = "#000000"
+                    try:
+                        if cell.font and cell.font.color and cell.font.color.rgb:
+                            tc = cell.font.color.rgb
+                            if (
+                                isinstance(tc, str)
+                                and len(tc) >= 6
+                                and tc != "00000000"
+                            ):
+                                text_color = "#" + tc[-6:]
+                    except Exception:
+                        pass
+
+                    text_x = x + PADDING
+                    text_y = y + (rh - FONT_SIZE) // 2
+
+                    try:
+                        if cell.alignment:
+                            if cell.alignment.horizontal == "center":
+                                bbox = draw.textbbox((0, 0), text, font=text_font)
+                                tw = bbox[2] - bbox[0]
+                                text_x = x + (cell_w - tw) // 2
+                            elif cell.alignment.horizontal == "right":
+                                bbox = draw.textbbox((0, 0), text, font=text_font)
+                                tw = bbox[2] - bbox[0]
+                                text_x = x + cell_w - tw - PADDING
+                    except Exception:
+                        pass
+
+                    draw.text(
+                        (text_x, text_y), text, fill=text_color, font=text_font
+                    )
+
+                x += w
+            y += rh
+
+        buffer = BytesIO()
+        img.save(buffer, format="PNG", optimize=True)
+        buffer.seek(0)
+        wb.close()
+        return buffer.read()
+
+    @staticmethod
+    def _get_pil_font(size: int = 11, bold: bool = False):
+        """Get a PIL font, trying system fonts first."""
+        from PIL import ImageFont
+
+        if bold:
+            names = ["arialbd.ttf", "calibrib.ttf", "DejaVuSans-Bold.ttf"]
+        else:
+            names = ["arial.ttf", "calibri.ttf", "DejaVuSans.ttf"]
+
+        for name in names:
+            try:
+                return ImageFont.truetype(name, size)
+            except (OSError, IOError):
+                pass
+
+        try:
+            return ImageFont.load_default(size)
+        except TypeError:
+            return ImageFont.load_default()

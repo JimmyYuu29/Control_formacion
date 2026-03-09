@@ -199,6 +199,7 @@ class EmailSender:
         template: Optional[EmailTemplate] = None,
         cc_emails: Optional[List[str]] = None,
         test_mode: bool = False,
+        screenshots: Optional[List[Tuple[str, bytes]]] = None,
     ) -> ProcessingResult:
         """Send batch of emails.
 
@@ -269,6 +270,20 @@ class EmailSender:
             extra_vars = {}
             if block:
                 extra_vars["num_profesionales"] = str(len(block.entries))
+
+            # Add screenshot variable if available
+            if screenshots:
+                tutor_safe = nombre.replace(" ", "_")
+                for sname, scontent in screenshots:
+                    if tutor_safe in sname:
+                        b64 = base64.b64encode(scontent).decode("utf-8")
+                        extra_vars["screenshot"] = (
+                            '<img src="data:image/png;base64,' + b64
+                            + '" style="max-width:100%;height:auto;">'
+                        )
+                        break
+                if "screenshot" not in extra_vars:
+                    extra_vars["screenshot"] = ""
 
             # Compose
             composition = self.compose_email(
@@ -348,6 +363,7 @@ class EmailSender:
         self,
         mapping: ContactMapping,
         block: DataBlock,
+        screenshots: Optional[List[Tuple[str, bytes]]] = None,
     ) -> dict:
         """Preview email content without attachment.
 
@@ -369,6 +385,21 @@ class EmailSender:
             "fecha": date.today().strftime("%d/%m/%Y"),
             "periodo": str(date.today().year),
         }
+
+        # Add screenshot variable if available
+        if screenshots:
+            nombre = mapping.recipient.nombre
+            tutor_safe = nombre.replace(" ", "_")
+            for sname, scontent in screenshots:
+                if tutor_safe in sname:
+                    b64 = base64.b64encode(scontent).decode("utf-8")
+                    variables["screenshot"] = (
+                        '<img src="data:image/png;base64,' + b64
+                        + '" style="max-width:100%;height:auto;">'
+                    )
+                    break
+        if "screenshot" not in variables:
+            variables["screenshot"] = ""
 
         subject = self._substitute_variables(self._template.subject, variables)
         body = self._substitute_variables(self._template.body, variables)

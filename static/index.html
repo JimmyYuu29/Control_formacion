@@ -156,6 +156,14 @@
             <div class="card">
                 <h2>2. Seleccion de columnas</h2>
                 <p style="color:var(--text-sec); margin-bottom:12px;">Seleccione las columnas que desea incluir en los archivos generados.</p>
+                <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+                    <label style="font-weight:500; font-size:0.88rem;">Presets:</label>
+                    <select id="presetSelect" class="form-input" style="width:auto; min-width:200px;" onchange="loadPresetColumns(this.value)">
+                        <option value="">-- Seleccionar preset --</option>
+                    </select>
+                    <button class="btn btn-outline btn-sm" onclick="promptSavePreset()">Guardar preset</button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteSelectedPreset()">Eliminar</button>
+                </div>
                 <div class="chk-wrap" style="margin-bottom:10px;">
                     <input type="checkbox" id="selectAllCols" checked onchange="toggleAllColumns(this.checked)">
                     <label for="selectAllCols"><strong>Seleccionar todas</strong></label>
@@ -179,10 +187,15 @@
                         <tbody id="groupsBody"></tbody>
                     </table>
                 </div>
+                <div id="screenshotsContainer" style="display:none; margin-top:16px;">
+                    <h3 style="font-size:0.95rem; margin-bottom:8px;">Capturas de pantalla generadas</h3>
+                    <div id="screenshotsList" style="display:flex; flex-wrap:wrap; gap:8px;"></div>
+                </div>
                 <div class="btn-group">
                     <button class="btn btn-outline" onclick="goStep(2)">Anterior</button>
                     <button class="btn btn-success" id="btnGenerate" onclick="generateFiles()">Generar archivos</button>
-                    <button class="btn btn-outline" id="btnDownloadZip" style="display:none" onclick="downloadZip()">Descargar ZIP</button>
+                    <button class="btn btn-outline" id="btnDownloadZip" style="display:none" onclick="downloadZip()">Descargar ZIP Excel</button>
+                    <button class="btn btn-outline" id="btnDownloadScreenshots" style="display:none" onclick="downloadScreenshotsZip()">Descargar ZIP PNG</button>
                     <button class="btn btn-primary" id="btnNext3" disabled onclick="goStep(4)">Siguiente</button>
                 </div>
             </div>
@@ -223,6 +236,14 @@
         <div class="step-section" id="step5">
             <div class="card">
                 <h2>5. Componer email</h2>
+                <div style="display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
+                    <label style="font-weight:500; font-size:0.88rem;">Plantillas guardadas:</label>
+                    <select id="emailTemplateSelect" class="form-input" style="width:auto; min-width:200px;" onchange="loadEmailTemplateContent(this.value)">
+                        <option value="">-- Seleccionar plantilla --</option>
+                    </select>
+                    <button class="btn btn-outline btn-sm" onclick="promptSaveEmailTemplate()">Guardar plantilla</button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteSelectedEmailTemplate()">Eliminar</button>
+                </div>
                 <div class="form-group">
                     <label>Asunto</label>
                     <input type="text" class="form-input" id="emailSubject" value="Evaluacion Formacion -- {{tutor_name}}">
@@ -249,12 +270,13 @@
                         <button onclick="insertImage()" title="Insertar imagen">Imagen</button>
                         <button onclick="insertImageFile()" title="Insertar imagen desde archivo">Archivo</button>
                         <button onclick="insertTable()" title="Insertar tabla">Tabla</button>
+                        <button onclick="insertScreenshotPlaceholder()" title="Insertar captura del Excel" style="background:#fff3cd;">📷 Captura</button>
                     </div>
                     <div class="editor-body" id="emailBody" contenteditable="true"></div>
                     <input type="file" id="imageFileInput" accept="image/*" style="display:none">
                 </div>
                 <p style="font-size:0.82rem; color:var(--text-sec); margin-top:6px;">
-                    Variables disponibles: <code>{{tutor_name}}</code>, <code>{{num_profesionales}}</code>, <code>{{fecha}}</code>, <code>{{periodo}}</code>
+                    Variables disponibles: <code>{{tutor_name}}</code>, <code>{{num_profesionales}}</code>, <code>{{fecha}}</code>, <code>{{periodo}}</code>, <code>{{screenshot}}</code>
                 </p>
                 <div class="btn-group" style="justify-content: space-between;">
                     <button class="btn btn-outline btn-sm" onclick="previewEmail()">Vista previa</button>
@@ -321,6 +343,8 @@
         checkPowerAutomate();
         checkStoredContacts();
         loadDefaultTemplate();
+        loadPresets();
+        loadEmailTemplates();
     });
 
     function loadHealth() {
@@ -535,6 +559,9 @@
             document.getElementById('btnNext3').disabled = false;
             document.getElementById('btnDownloadZip').style.display = 'inline-flex';
             showNotification(result.files_generated + ' archivos generados', 'success');
+            if (result.screenshots && result.screenshots.length > 0) {
+                renderScreenshots(result.screenshots);
+            }
         } catch (e) {}
     }
 
@@ -737,6 +764,159 @@
         });
         html += '</tbody></table>';
         div.innerHTML = html;
+    }
+
+    /* ── Column Presets ── */
+    let presetsData = {};
+
+    async function loadPresets() {
+        try {
+            const data = await fetch('/api/presets').then(r => r.json());
+            presetsData = data.presets || {};
+            const sel = document.getElementById('presetSelect');
+            sel.innerHTML = '<option value="">-- Seleccionar preset --</option>';
+            for (const name in presetsData) {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                sel.appendChild(opt);
+            }
+        } catch (e) {}
+    }
+
+    function loadPresetColumns(name) {
+        if (!name || !presetsData[name]) return;
+        const presetCols = new Set(presetsData[name].columns);
+        columnsData.forEach((c, i) => { c.selected = presetCols.has(c.letter); });
+        document.querySelectorAll('#columnsContainer input[type=checkbox][data-colidx]').forEach(cb => {
+            const idx = parseInt(cb.dataset.colidx);
+            if (!isNaN(idx)) cb.checked = columnsData[idx].selected;
+        });
+        document.querySelectorAll('#columnsContainer input[data-cat]').forEach(cb => {
+            const cat = cb.dataset.cat;
+            const catCols = columnsData.filter(c => (c.category || '(General)') === cat);
+            cb.checked = catCols.length > 0 && catCols.every(c => c.selected);
+        });
+        document.getElementById('selectAllCols').checked = columnsData.every(c => c.selected);
+        showNotification('Preset "' + name + '" cargado', 'success');
+    }
+
+    async function promptSavePreset() {
+        const name = prompt('Nombre del preset:');
+        if (!name || !name.trim()) return;
+        const selected = columnsData.filter(c => c.selected).map(c => c.letter);
+        if (selected.length === 0) {
+            showNotification('Seleccione al menos una columna', 'warning');
+            return;
+        }
+        try {
+            await apiCall('/api/presets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name.trim(), columns: selected })
+            });
+            showNotification('Preset "' + name.trim() + '" guardado', 'success');
+            loadPresets();
+        } catch (e) {}
+    }
+
+    async function deleteSelectedPreset() {
+        const sel = document.getElementById('presetSelect');
+        const name = sel.value;
+        if (!name) { showNotification('Seleccione un preset para eliminar', 'warning'); return; }
+        if (!confirm('¿Eliminar preset "' + name + '"?')) return;
+        try {
+            await apiCall('/api/presets/' + encodeURIComponent(name), { method: 'DELETE' });
+            showNotification('Preset eliminado', 'success');
+            loadPresets();
+        } catch (e) {}
+    }
+
+    /* ── Screenshots ── */
+    let screenshotsData = [];
+
+    function renderScreenshots(filenames) {
+        screenshotsData = filenames;
+        const container = document.getElementById('screenshotsContainer');
+        const list = document.getElementById('screenshotsList');
+        if (!filenames || filenames.length === 0) {
+            container.style.display = 'none';
+            return;
+        }
+        container.style.display = 'block';
+        list.innerHTML = '';
+        filenames.forEach(f => {
+            const a = document.createElement('a');
+            a.href = '/api/screenshots/' + encodeURIComponent(f);
+            a.download = f;
+            a.className = 'btn btn-outline btn-sm';
+            a.style.textDecoration = 'none';
+            a.textContent = f;
+            list.appendChild(a);
+        });
+        document.getElementById('btnDownloadScreenshots').style.display = 'inline-flex';
+    }
+
+    function downloadScreenshotsZip() {
+        window.location.href = '/api/download-screenshots-zip';
+    }
+
+    function insertScreenshotPlaceholder() {
+        execCmd('insertHTML', '<span style="background:#fff3cd;padding:2px 6px;border-radius:3px;border:1px dashed #ffc107;">{{screenshot}}</span>');
+    }
+
+    /* ── Persistent Email Templates ── */
+    let emailTemplatesData = {};
+
+    async function loadEmailTemplates() {
+        try {
+            const data = await fetch('/api/email-templates').then(r => r.json());
+            emailTemplatesData = data.templates || {};
+            const sel = document.getElementById('emailTemplateSelect');
+            sel.innerHTML = '<option value="">-- Seleccionar plantilla --</option>';
+            for (const name in emailTemplatesData) {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                sel.appendChild(opt);
+            }
+        } catch (e) {}
+    }
+
+    function loadEmailTemplateContent(name) {
+        if (!name || !emailTemplatesData[name]) return;
+        const tpl = emailTemplatesData[name];
+        document.getElementById('emailSubject').value = tpl.subject;
+        document.getElementById('emailBody').innerHTML = tpl.body;
+        showNotification('Plantilla "' + name + '" cargada', 'success');
+    }
+
+    async function promptSaveEmailTemplate() {
+        const name = prompt('Nombre de la plantilla:');
+        if (!name || !name.trim()) return;
+        const subject = document.getElementById('emailSubject').value;
+        const body = document.getElementById('emailBody').innerHTML;
+        try {
+            await apiCall('/api/email-templates', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name.trim(), subject: subject, body: body, is_html: true })
+            });
+            showNotification('Plantilla "' + name.trim() + '" guardada', 'success');
+            loadEmailTemplates();
+        } catch (e) {}
+    }
+
+    async function deleteSelectedEmailTemplate() {
+        const sel = document.getElementById('emailTemplateSelect');
+        const name = sel.value;
+        if (!name) { showNotification('Seleccione una plantilla para eliminar', 'warning'); return; }
+        if (!confirm('¿Eliminar plantilla "' + name + '"?')) return;
+        try {
+            await apiCall('/api/email-templates/' + encodeURIComponent(name), { method: 'DELETE' });
+            showNotification('Plantilla eliminada', 'success');
+            loadEmailTemplates();
+        } catch (e) {}
     }
     </script>
 </body>

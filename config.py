@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     contacts_store_path: str = "data/contacts_store.json"
     contacts_delete_password: str = "Formacion2026"
 
+    # Presets & Templates persistence
+    presets_store_path: str = "data/column_presets.json"
+    templates_store_path: str = "data/email_templates.json"
+
     # Email
     default_cc_emails: str = ""
 

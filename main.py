@@ -1,7 +1,9 @@
 """FastAPI application entry point for Formación Evaluation Splitter."""
 
+import base64
+import json
 import logging
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import List, Optional
@@ -54,6 +56,7 @@ session_data = {
     "file_content": None,
     "mappings": None,
     "generated_files": None,
+    "generated_screenshots": None,
     "split_mode": None,
     "selected_columns": None,
     "template": None,
@@ -80,6 +83,37 @@ class SendRequest(BaseModel):
 
 class DeleteContactsRequest(BaseModel):
     password: str
+
+
+class PresetSaveRequest(BaseModel):
+    name: str
+    columns: List[str]
+
+
+class EmailTemplateSaveRequest(BaseModel):
+    name: str
+    subject: str
+    body: str
+    is_html: bool = True
+
+
+# ── JSON Persistence Helpers ─────────────────────────────────────────
+
+def _load_json_store(path: str) -> dict:
+    """Load a JSON file, returning empty dict if not found."""
+    p = Path(path)
+    if p.exists():
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def _save_json_store(path: str, data: dict) -> None:
+    """Save data to a JSON file, creating directories if needed."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 # ── Health ───────────────────────────────────────────────────────────
@@ -169,7 +203,47 @@ async def set_columns(request: ColumnSelectionRequest):
     """Select columns for output files."""
     session_data["selected_columns"] = request.columns
     session_data["generated_files"] = None  # Invalidate previous generation
+    session_data["generated_screenshots"] = None
     return {"status": "ok", "selected": request.columns}
+
+
+# ── Column Presets ───────────────────────────────────────────────────
+
+@app.get("/api/presets")
+async def get_presets():
+    """List all saved column presets."""
+    store = _load_json_store(settings.presets_store_path)
+    return {"presets": store}
+
+
+@app.post("/api/presets")
+async def save_preset(request: PresetSaveRequest):
+    """Save a column preset."""
+    name = request.name.strip()
+    if not name or len(name) > 100:
+        raise HTTPException(status_code=400, detail="Nombre inválido")
+    if not request.columns:
+        raise HTTPException(status_code=400, detail="Debe incluir al menos una columna")
+
+    store = _load_json_store(settings.presets_store_path)
+    store[name] = {
+        "name": name,
+        "columns": request.columns,
+        "created_at": datetime.now().isoformat(),
+    }
+    _save_json_store(settings.presets_store_path, store)
+    return {"status": "ok", "message": f"Preset '{name}' guardado"}
+
+
+@app.delete("/api/presets/{name}")
+async def delete_preset(name: str):
+    """Delete a column preset."""
+    store = _load_json_store(settings.presets_store_path)
+    if name not in store:
+        raise HTTPException(status_code=404, detail=f"Preset '{name}' no encontrado")
+    del store[name]
+    _save_json_store(settings.presets_store_path, store)
+    return {"status": "ok", "message": f"Preset '{name}' eliminado"}
 
 
 @app.post("/api/generate-files")
@@ -196,10 +270,15 @@ async def generate_files():
         )
         session_data["generated_files"] = files
 
+        # Generate PNG screenshots
+        screenshots = generator.generate_screenshots(files)
+        session_data["generated_screenshots"] = screenshots
+
         return {
             "status": "ok",
             "files_generated": len(files),
             "filenames": [f[0] for f in files],
+            "screenshots": [s[0] for s in screenshots],
         }
 
     except Exception as e:
@@ -248,6 +327,50 @@ async def download_file(filename: str):
         BytesIO(file_data[1]),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+# ── Screenshot Downloads ─────────────────────────────────────────────
+
+@app.get("/api/screenshots/{filename}")
+async def download_screenshot(filename: str):
+    """Download a specific PNG screenshot."""
+    screenshots = session_data.get("generated_screenshots")
+    if not screenshots:
+        raise HTTPException(status_code=409, detail="No hay capturas generadas.")
+
+    safe_name = Path(filename).name
+    file_data = next((s for s in screenshots if s[0] == safe_name), None)
+    if not file_data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Captura '{filename}' no encontrada",
+        )
+
+    return StreamingResponse(
+        BytesIO(file_data[1]),
+        media_type="image/png",
+        headers={"Content-Disposition": f"attachment; filename={safe_name}"},
+    )
+
+
+@app.get("/api/download-screenshots-zip")
+async def download_screenshots_zip():
+    """Download all screenshots as ZIP."""
+    screenshots = session_data.get("generated_screenshots")
+    if not screenshots:
+        raise HTTPException(
+            status_code=409,
+            detail="No hay capturas generadas.",
+        )
+
+    generator = ExcelGenerator()
+    zip_content = generator.create_zip_archive(screenshots, "capturas.zip")
+
+    return StreamingResponse(
+        BytesIO(zip_content),
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=capturas.zip"},
     )
 
 
@@ -356,6 +479,54 @@ async def update_template(request: TemplateRequest):
     return {"status": "ok", "message": "Plantilla actualizada"}
 
 
+# ── Persistent Email Templates ───────────────────────────────────────
+
+@app.get("/api/email-templates")
+async def list_email_templates():
+    """List all saved email templates."""
+    store = _load_json_store(settings.templates_store_path)
+    return {"templates": store}
+
+
+@app.post("/api/email-templates")
+async def save_email_template(request: EmailTemplateSaveRequest):
+    """Save an email template persistently."""
+    name = request.name.strip()
+    if not name or len(name) > 100:
+        raise HTTPException(status_code=400, detail="Nombre inválido")
+
+    store = _load_json_store(settings.templates_store_path)
+    store[name] = {
+        "name": name,
+        "subject": request.subject,
+        "body": request.body,
+        "is_html": request.is_html,
+        "created_at": datetime.now().isoformat(),
+    }
+    _save_json_store(settings.templates_store_path, store)
+    return {"status": "ok", "message": f"Plantilla '{name}' guardada"}
+
+
+@app.get("/api/email-templates/{name}")
+async def load_email_template(name: str):
+    """Load a specific email template."""
+    store = _load_json_store(settings.templates_store_path)
+    if name not in store:
+        raise HTTPException(status_code=404, detail=f"Plantilla '{name}' no encontrada")
+    return store[name]
+
+
+@app.delete("/api/email-templates/{name}")
+async def delete_email_template(name: str):
+    """Delete a saved email template."""
+    store = _load_json_store(settings.templates_store_path)
+    if name not in store:
+        raise HTTPException(status_code=404, detail=f"Plantilla '{name}' no encontrada")
+    del store[name]
+    _save_json_store(settings.templates_store_path, store)
+    return {"status": "ok", "message": f"Plantilla '{name}' eliminada"}
+
+
 @app.get("/api/preview-email")
 async def preview_email(code: str = Query(...)):
     """Preview email for a specific Tutor."""
@@ -383,7 +554,8 @@ async def preview_email(code: str = Query(...)):
     if session_data.get("template"):
         sender.set_template(session_data["template"])
 
-    return sender.preview_email(mapping, block)
+    screenshots = session_data.get("generated_screenshots")
+    return sender.preview_email(mapping, block, screenshots=screenshots)
 
 
 # ── Power Automate ───────────────────────────────────────────────────
@@ -443,6 +615,7 @@ def send_emails(request: SendRequest):
             template=template,
             cc_emails=request.cc_emails if request.cc_emails else None,
             test_mode=request.test_mode,
+            screenshots=session_data.get("generated_screenshots"),
         )
 
         return {
