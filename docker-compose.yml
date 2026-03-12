@@ -8,6 +8,7 @@ services:
       - "8002:8002"
     volumes:
       - ./data:/app/data
+      - /home/rootadmin/data/Control_formacion:/home/rootadmin/data/Control_formacion
       - ./.env:/app/.env:ro
     environment:
       - HOST=0.0.0.0

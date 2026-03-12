@@ -1,5 +1,6 @@
 """Application configuration settings."""
 
+from pathlib import Path
 from typing import List
 
 from pydantic_settings import BaseSettings
@@ -15,6 +16,10 @@ class Settings(BaseSettings):
     sharepoint_flow_url: str = ""
     sharepoint_site_name: str = ""
     sharepoint_folder_path: str = ""
+
+    # ── External persistent data root ────────────────────────────────
+    data_root_path: str = "/home/rootadmin/data/Control_formacion"
+    max_history: int = 10
 
     # Contacts
     contacts_file_path: str = "data/Contactos_Tutores.xlsx"
@@ -35,7 +40,7 @@ class Settings(BaseSettings):
 
     # App Identity
     app_name: str = "Formación Evaluation Splitter"
-    app_version: str = "1.0.0"
+    app_version: str = "2.0.0"
 
     @property
     def cc_email_list(self) -> List[str]:
@@ -43,6 +48,22 @@ class Settings(BaseSettings):
         if not self.default_cc_emails:
             return []
         return [e.strip() for e in self.default_cc_emails.split(",") if e.strip()]
+
+    @property
+    def data_root(self) -> Path:
+        return Path(self.data_root_path)
+
+    @property
+    def temp_path(self) -> Path:
+        return self.data_root / "temp"
+
+    @property
+    def basedata_path(self) -> Path:
+        return self.data_root / "basedata"
+
+    @property
+    def history_file(self) -> Path:
+        return self.data_root / "history.json"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

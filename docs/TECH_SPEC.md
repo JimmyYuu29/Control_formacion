@@ -1,10 +1,10 @@
 # Technical Specification: Formación Evaluation Splitter
 
-> **Version:** 1.0.0
+> **Version:** 2.0.0
 > **App Name:** Formación Evaluation Splitter
 > **Category:** Excel Upload → Split → Email Distribution
 > **Organization:** Forvis Mazars
-> **Last Updated:** 2026-03-05
+> **Last Updated:** 2026-03-10
 
 ---
 
@@ -17,7 +17,9 @@ This document defines the technical specification for the **Formación Evaluatio
 3. **Split** data by Tutor, allowing column selection via sample preview
 4. **Generate** individual Excel files per Tutor preserving all original formatting
 5. **Map contacts** — match Tutors to email addresses
-6. **Send** files as email attachments via Power Automate with rich HTML content
+6. **Send** files as email attachments via Power Automate with rich HTML content, CID-embedded images, and full style preservation
+7. **Persist data** to external directory for survival across app updates
+8. **Track history** of up to 10 operations with restore capability
 
 ---
 
@@ -36,7 +38,8 @@ This document defines the technical specification for the **Formación Evaluatio
 | **Async File I/O** | aiofiles | ≥ 23.2.1 | For file upload handling |
 | **Email Validation** | email-validator | ≥ 2.0.0 | RFC-compliant validation |
 | **Frontend** | HTML5 + Vanilla JS | - | Single-page application |
-| **Testing** | pytest | ≥ 7.4.0 | 33 unit tests |
+| **Image Processing** | Pillow | ≥ 10.0.0 | Screenshot handling & CID embedding |
+| **PDF/Image** | PyMuPDF | ≥ 1.23.0 | PDF → PNG conversion |
 
 ---
 
@@ -59,7 +62,8 @@ Control_formacion/
 │   ├── excel_parser.py         # Multi-row header parsing & Tutor grouping
 │   ├── excel_generator.py      # Individual Excel file generation with formatting
 │   ├── contact_mapper.py       # Tutor→Email mapping with fuzzy matching
-│   └── email_sender.py         # Power Automate email integration
+│   ├── email_sender.py         # Power Automate email (CID images, HTML wrapper)
+│   └── data_manager.py         # External data persistence & history (NEW v2.0.0)
 ├── static/
 │   ├── index.html              # Frontend SPA (6-step wizard)
 │   └── images/                 # Email template images
@@ -112,7 +116,11 @@ DEBUG=false
 
 # App Identity
 APP_NAME=Formación Evaluation Splitter
-APP_VERSION=1.0.0
+APP_VERSION=2.0.0
+
+# Data Persistence (NEW v2.0.0)
+DATA_ROOT_PATH=/home/rootadmin/data/Control_formacion
+MAX_HISTORY=10
 ```
 
 ### 4.2 Configuration Class (config.py)
@@ -131,7 +139,11 @@ class Settings(BaseSettings):
     port: int = 8002
     debug: bool = False
     app_name: str = "Formación Evaluation Splitter"
-    app_version: str = "1.0.0"
+    app_version: str = "2.0.0"
+
+    # Data persistence (NEW v2.0.0)
+    data_root_path: str = "/home/rootadmin/data/Control_formacion"
+    max_history: int = 10
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -217,7 +229,19 @@ settings = Settings()
 }
 ```
 
-### 5.6 Frontend
+### 5.6 History & Data Persistence (NEW v2.0.0)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/history` | List all history entries (max 10) |
+| `GET` | `/api/history/{run_id}` | Get history entry with file listing |
+| `GET` | `/api/history/{run_id}/file/{filename}` | Download file from history |
+| `DELETE` | `/api/history/{run_id}` | Delete history entry and files |
+| `POST` | `/api/history/{run_id}/restore` | Restore files from history into session |
+| `POST` | `/api/sync` | Manual data sync with external directory |
+| `GET` | `/api/data-info` | Get storage paths and status info |
+
+### 5.7 Frontend
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -348,26 +372,70 @@ class ProcessingResult(BaseModel):
 
 ### 7.4 EmailSender (services/email_sender.py)
 
-- Template variables: `{{tutor_name}}`, `{{num_profesionales}}`, `{{fecha}}`, `{{periodo}}`
+- Template variables: `{{tutor_name}}`, `{{num_profesionales}}`, `{{fecha}}`, `{{periodo}}`, `{{screenshot}}`
 - Sends via Power Automate HTTP POST webhook
 - 60-second timeout per request
 - Batch sending with test mode and exclusion support
-- Base64-encodes Excel attachments
+- **CID-based inline image embedding** (replaces data-URI base64 for email compatibility)
+- **Full HTML email wrapper** with table-based layout and inline styles
+- Screenshots sent as separate CID attachments (`cid:screenshot_excel`)
+- Inline images extracted from editor HTML and converted to CID attachments
+- Multiple attachments support: Excel file + CID images in single payload
+
+### 7.5 DataManager (services/data_manager.py) — NEW v2.0.0
+
+- Manages external data directory at `/home/rootadmin/data/Control_formacion/`
+- **Bidirectional sync** of JSON stores (contacts, presets, templates) on startup
+- Creates timestamped run folders (`temp/run_YYYYMMDD_HHMMSS/`) for each file generation
+- **History tracking** with max 10 entries; auto-cleanup of oldest when limit exceeded
+- Each history entry stores: filename, tutors_count, files_count, timestamps, status
+- Run folders contain `generated/` (Excel) and `screenshots/` (PNG) subdirectories
+- Supports restore operations to reload files from a previous run
 
 ---
 
 ## 8. Power Automate JSON Payload
+
+### 8.1 Standard Payload (v2.0.0 with attachments array)
 
 ```json
 {
   "to": "tutor@example.com",
   "cc": "cc1@example.com;cc2@example.com",
   "subject": "Evaluación Formación — Juan Berral",
-  "body": "<p>HTML email body with rich content</p>",
+  "body": "<html>...<img src='cid:screenshot_excel'>...</html>",
   "isHtml": true,
   "attachmentName": "Juan_Berral_evaluaciones.xlsx",
-  "attachmentContent": "BASE64_ENCODED_CONTENT"
+  "attachmentContent": "BASE64_ENCODED_EXCEL",
+  "attachments": [
+    {
+      "name": "Juan_Berral_evaluaciones.xlsx",
+      "content": "BASE64_ENCODED_EXCEL",
+      "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    },
+    {
+      "name": "screenshot.png",
+      "content": "BASE64_ENCODED_PNG",
+      "contentType": "image/png",
+      "contentId": "screenshot_excel"
+    },
+    {
+      "name": "inline_img_1.png",
+      "content": "BASE64_ENCODED_PNG",
+      "contentType": "image/png",
+      "contentId": "inline_img_1"
+    }
+  ]
 }
+```
+
+### 8.2 Key Changes from v1.x
+
+- **`attachments` array**: Supports multiple attachments including CID-referenced inline images
+- **`contentId` field**: Enables inline image display in email body via `cid:` references
+- **HTML wrapper**: Body is wrapped in a complete HTML document with table-based layout
+- Legacy `attachmentName`/`attachmentContent` fields kept for backward compatibility
+- See `docs/POWER_AUTOMATE_FLOW.md` for complete flow construction guide
 ```
 
 ---
@@ -383,6 +451,8 @@ session_data = {
     "split_mode": "tutor",      # Fixed mode for this app
     "selected_columns": None,   # List[str]: column letters
     "template": None,           # EmailTemplate
+    "current_run_path": None,   # Path to current run folder (NEW v2.0.0)
+    "current_run_id": None,     # ID of current run (NEW v2.0.0)
 }
 ```
 

@@ -71,6 +71,7 @@ cp .env.example .env
 
 # 2. Crear directorio de datos
 mkdir -p data
+mkdir -p /home/rootadmin/data/Control_formacion
 
 # 3. Ejecutar con Docker Compose
 docker-compose up -d
@@ -101,6 +102,8 @@ docker-compose down
 | `CONTACTS_STORE_PATH` | No | `data/contacts_store.json` | Ruta al almacén persistente de contactos |
 | `CONTACTS_DELETE_PASSWORD` | No | `Formacion2026` | Contraseña para eliminar contactos almacenados |
 | `DEFAULT_CC_EMAILS` | No | `""` | Emails CC por defecto (separados por coma) |
+| `DATA_ROOT_PATH` | No | `/home/rootadmin/data/Control_formacion` | Ruta de persistencia de datos externa |
+| `MAX_HISTORY` | No | `10` | Número máximo de operaciones en historial |
 | `HOST` | No | `0.0.0.0` | Host del servidor |
 | `PORT` | No | `8002` | Puerto del servidor |
 | `DEBUG` | No | `false` | Modo debug |
@@ -159,6 +162,8 @@ El archivo de contactos (`Contactos_Tutores.xlsx`) debe tener las siguientes col
    - `{{num_profesionales}}` — Cantidad de profesionales
    - `{{fecha}}` — Fecha de envío (DD/MM/YYYY)
    - `{{periodo}}` — Periodo de evaluación
+   - `{{screenshot}}` — Captura de pantalla del Excel del Tutor
+4. Guardar plantillas de email con nombre para reutilizar
 
 ### Paso 6 — Previsualizar y enviar
 
@@ -188,7 +193,19 @@ El archivo de contactos (`Contactos_Tutores.xlsx`) debe tener las siguientes col
         "body": { "type": "string" },
         "isHtml": { "type": "boolean" },
         "attachmentName": { "type": "string" },
-        "attachmentContent": { "type": "string" }
+        "attachmentContent": { "type": "string" },
+        "attachments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "content": { "type": "string" },
+                    "contentType": { "type": "string" },
+                    "contentId": { "type": "string" }
+                }
+            }
+        }
     }
 }
 ```
@@ -199,8 +216,12 @@ El archivo de contactos (`Contactos_Tutores.xlsx`) debe tener las siguientes col
    - **Body:** `@{triggerBody()?['body']}`
    - **CC:** `@{triggerBody()?['cc']}`
    - **Is HTML:** `@{triggerBody()?['isHtml']}`
-   - **Attachments Name:** `@{triggerBody()?['attachmentName']}`
-   - **Attachments Content:** `@{base64ToBinary(triggerBody()?['attachmentContent'])}`
+   - **Attachments:** Usar la expresión `@{triggerBody()?['attachments']}` para múltiples adjuntos con imágenes CID inline
+
+> **Nota v2.0.0:** El payload ahora incluye un array `attachments` con soporte de imagenes CID inline.
+> Las imágenes insertadas en el editor (capturas, logos) se envían como adjuntos con `contentId`
+> y se referencian en el HTML con `cid:`. Esto garantiza la preservación completa de estilos.
+> Ver `docs/POWER_AUTOMATE_FLOW.md` para la guía completa de configuración.
 
 5. Guardar el flow y copiar la **HTTP POST URL**
 6. Pegar la URL en el archivo `.env`:
@@ -246,6 +267,12 @@ Fila 5+: Datos de profesionales
 | `GET` | `/api/preview-email` | Previsualizar email |
 | `GET` | `/api/power-automate/status` | Verificar conexión con Power Automate |
 | `POST` | `/api/send` | Enviar emails |
+| `GET` | `/api/history` | Listar historial de operaciones (max 10) |
+| `GET` | `/api/history/{run_id}` | Ver detalles de operación |
+| `DELETE` | `/api/history/{run_id}` | Eliminar operación |
+| `POST` | `/api/history/{run_id}/restore` | Restaurar archivos de operación |
+| `POST` | `/api/sync` | Sincronizar datos con directorio externo |
+| `GET` | `/api/data-info` | Información del almacenamiento |
 
 ---
 
@@ -284,7 +311,8 @@ Control_formacion/
 │   ├── excel_parser.py         # Parsing de encabezados multi-fila
 │   ├── excel_generator.py      # Generación de archivos con formato
 │   ├── contact_mapper.py       # Mapeo fuzzy de contactos
-│   └── email_sender.py         # Envío via Power Automate
+│   ├── email_sender.py         # Envío via Power Automate (CID images)
+│   └── data_manager.py         # Persistencia de datos y historial (v2.0.0)
 ├── static/
 │   ├── index.html              # Frontend SPA (wizard 6 pasos)
 │   └── images/                 # Imágenes para plantillas de email
@@ -313,6 +341,9 @@ Control_formacion/
 - **Diseño single-user:** La app está diseñada para un usuario a la vez
 - **Sesión en memoria:** Los datos de sesión se pierden al reiniciar el servidor
 - **Contactos persistentes:** Los contactos mapeados se guardan en JSON y se reutilizan entre sesiones
+- **Persistencia externa:** Datos sincronizados con `/home/rootadmin/data/Control_formacion/` para sobrevivir actualizaciones
+- **Historial:** Se guardan hasta 10 operaciones recientes con posibilidad de restaurar archivos
+- **Imágenes CID:** Las capturas y imágenes inline se envían como adjuntos CID para compatibilidad total con clientes de email
 - **Eliminación de contactos:** Requiere la contraseña configurada en `CONTACTS_DELETE_PASSWORD`
 
 ---

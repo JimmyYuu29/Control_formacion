@@ -15,8 +15,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application
 COPY . .
 
-# Create data directory
-RUN mkdir -p /app/data
+# Create data directories
+RUN mkdir -p /app/data \
+    && mkdir -p /home/rootadmin/data/Control_formacion/temp \
+    && mkdir -p /home/rootadmin/data/Control_formacion/basedata
 
 # Expose port
 EXPOSE 8002

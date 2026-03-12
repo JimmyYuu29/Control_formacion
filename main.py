@@ -3,6 +3,7 @@
 import base64
 import json
 import logging
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
@@ -23,6 +24,7 @@ from services.excel_parser import ExcelParser
 from services.excel_generator import ExcelGenerator
 from services.contact_mapper import ContactMapper
 from services.email_sender import EmailSender
+from services.data_manager import DataManager
 
 # ── Logging ──────────────────────────────────────────────────────────
 
@@ -33,12 +35,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ── Data Manager ─────────────────────────────────────────────────────
+
+data_manager = DataManager()
+
+
+# ── Lifespan (startup / shutdown) ────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Run data sync on startup, cleanup on shutdown."""
+    logger.info("Starting up — syncing data from %s", settings.data_root_path)
+    data_manager.sync_data_on_startup()
+    data_manager.cleanup_temp()
+    yield
+    logger.info("Shutting down — pushing data to external storage")
+    data_manager.sync_data_to_external()
+
+
 # ── App ──────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title=settings.app_name,
     description="Automatización de distribución de evaluaciones de formación",
     version=settings.app_version,
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -60,6 +81,8 @@ session_data = {
     "split_mode": None,
     "selected_columns": None,
     "template": None,
+    "current_run_path": None,
+    "current_run_id": None,
 }
 
 
@@ -114,6 +137,11 @@ def _save_json_store(path: str, data: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    # Auto-sync to external basedata
+    try:
+        data_manager.sync_data_to_external()
+    except Exception:
+        pass
 
 
 # ── Health ───────────────────────────────────────────────────────────
@@ -248,7 +276,7 @@ async def delete_preset(name: str):
 
 @app.post("/api/generate-files")
 async def generate_files():
-    """Generate individual Excel files per Tutor."""
+    """Generate individual Excel files per Tutor and save to temp folder."""
     document = session_data.get("document")
     file_content = session_data.get("file_content")
 
@@ -274,11 +302,25 @@ async def generate_files():
         screenshots = generator.generate_screenshots(files)
         session_data["generated_screenshots"] = screenshots
 
+        # Save to temp folder and create history entry
+        run_path = data_manager.create_run_folder()
+        data_manager.save_run_files(run_path, files, screenshots)
+        session_data["current_run_path"] = run_path
+        session_data["current_run_id"] = run_path.name
+
+        entry = data_manager.add_history_entry(
+            run_path=run_path,
+            filename=document.filename,
+            tutors_count=len(document.blocks),
+            files_count=len(files),
+        )
+
         return {
             "status": "ok",
             "files_generated": len(files),
             "filenames": [f[0] for f in files],
             "screenshots": [s[0] for s in screenshots],
+            "run_id": entry["id"],
         }
 
     except Exception as e:
@@ -618,6 +660,19 @@ def send_emails(request: SendRequest):
             screenshots=session_data.get("generated_screenshots"),
         )
 
+        # Update history entry with send results
+        run_id = session_data.get("current_run_id")
+        if run_id:
+            data_manager.update_history_entry(
+                run_id,
+                emails_sent=result.sent_success,
+                emails_failed=result.sent_failed,
+                status="completed" if result.sent_failed == 0 else "partial",
+            )
+
+        # Sync data to external after email send
+        data_manager.sync_data_to_external()
+
         return {
             "status": "completed",
             "total": result.total,
@@ -647,6 +702,127 @@ def send_emails(request: SendRequest):
 # ── Frontend ─────────────────────────────────────────────────────────
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+# ── History Management ───────────────────────────────────────────────
+
+@app.get("/api/history")
+async def get_history():
+    """Get operation history (max 10 entries)."""
+    runs = data_manager.get_history()
+    return {"runs": runs, "max_history": settings.max_history}
+
+
+@app.get("/api/history/{run_id}")
+async def get_history_entry(run_id: str):
+    """Get a specific history entry with file listing."""
+    entry = data_manager.get_history_entry(run_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' no encontrado")
+
+    run_path = Path(entry["path"])
+    files = []
+    screenshots = []
+
+    gen_dir = run_path / "generated"
+    if gen_dir.exists():
+        files = [f.name for f in sorted(gen_dir.iterdir()) if f.is_file()]
+
+    scr_dir = run_path / "screenshots"
+    if scr_dir.exists():
+        screenshots = [f.name for f in sorted(scr_dir.iterdir()) if f.is_file()]
+
+    return {
+        **entry,
+        "files": files,
+        "screenshots": screenshots,
+    }
+
+
+@app.get("/api/history/{run_id}/file/{filename}")
+async def download_history_file(run_id: str, filename: str):
+    """Download a file from a history run."""
+    entry = data_manager.get_history_entry(run_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Run no encontrado")
+
+    safe_name = Path(filename).name
+    run_path = Path(entry["path"])
+
+    # Check generated/ first, then screenshots/
+    file_path = run_path / "generated" / safe_name
+    media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    if not file_path.exists():
+        file_path = run_path / "screenshots" / safe_name
+        media_type = "image/png"
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    return StreamingResponse(
+        BytesIO(file_path.read_bytes()),
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={safe_name}"},
+    )
+
+
+@app.delete("/api/history/{run_id}")
+async def delete_history_entry(run_id: str):
+    """Delete a history entry and its associated files."""
+    if data_manager.delete_history_entry(run_id):
+        return {"status": "ok", "message": f"Run '{run_id}' eliminado"}
+    raise HTTPException(status_code=404, detail="Run no encontrado")
+
+
+@app.post("/api/history/{run_id}/restore")
+async def restore_history_run(run_id: str):
+    """Restore files from a history run into the current session."""
+    entry = data_manager.get_history_entry(run_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Run no encontrado")
+
+    run_path = Path(entry["path"])
+    generated, screenshots = data_manager.load_run_files(run_path)
+
+    if not generated:
+        raise HTTPException(status_code=409, detail="No hay archivos en este run")
+
+    session_data["generated_files"] = generated
+    session_data["generated_screenshots"] = screenshots
+    session_data["current_run_path"] = run_path
+    session_data["current_run_id"] = run_id
+
+    return {
+        "status": "ok",
+        "files_restored": len(generated),
+        "screenshots_restored": len(screenshots),
+        "filenames": [f[0] for f in generated],
+        "screenshot_names": [s[0] for s in screenshots],
+    }
+
+
+# ── Data Sync ────────────────────────────────────────────────────────
+
+@app.post("/api/sync")
+async def sync_data():
+    """Manually trigger data sync to external storage."""
+    data_manager.sync_data_to_external()
+    return {"status": "ok", "message": "Datos sincronizados"}
+
+
+@app.get("/api/data-info")
+async def data_info():
+    """Get information about data storage paths and status."""
+    root = settings.data_root
+    return {
+        "data_root": str(root),
+        "temp_path": str(settings.temp_path),
+        "basedata_path": str(settings.basedata_path),
+        "data_root_exists": root.exists(),
+        "max_history": settings.max_history,
+        "history_count": len(data_manager.get_history()),
+    }
 
 
 @app.get("/")

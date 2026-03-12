@@ -1,10 +1,15 @@
-"""Email sender service via Power Automate HTTP trigger."""
+"""Email sender service via Power Automate HTTP trigger.
+
+Ensures full HTML fidelity: inline styles, CID-based image embedding
+for screenshots, and proper email-compatible HTML wrapping.
+"""
 
 import base64
 import html as html_module
 import logging
+import re
 from datetime import date, datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import requests
 
@@ -22,34 +27,87 @@ from models.schemas import (
 
 logger = logging.getLogger(__name__)
 
-# Timeout in seconds for HTTP POST
 REQUEST_TIMEOUT = 60
+
+# Full HTML email wrapper — uses inline styles only for maximum email client compatibility
+EMAIL_HTML_WRAPPER = """\
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{subject}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f4f4;font-family:Calibri,Arial,Helvetica,sans-serif;line-height:1.6;color:#333333;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f4;">
+<tr><td align="center" style="padding:20px 10px;">
+<table role="presentation" width="680" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,0.1);max-width:680px;width:100%;">
+<tr><td style="padding:24px 32px;">
+{body}
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
 
 
 class EmailSender:
     """Service for sending emails via Power Automate HTTP trigger."""
 
     def __init__(self, power_automate_url: Optional[str] = None):
-        """Initialize with Power Automate webhook URL.
-
-        Args:
-            power_automate_url: Override URL (uses settings if None)
-        """
         self._url = power_automate_url or settings.power_automate_url
         self._template = EmailTemplate()
         self._cc_emails: List[str] = list(settings.cc_email_list)
 
     def set_template(self, template: EmailTemplate) -> None:
-        """Set the email template."""
         self._template = template
 
     def set_cc_emails(self, emails: List[str]) -> None:
-        """Set CC email addresses."""
         self._cc_emails = [e.strip() for e in emails if e.strip()]
 
     def get_template(self) -> EmailTemplate:
-        """Get current email template."""
         return self._template
+
+    # ── HTML Processing ──────────────────────────────────────────────
+
+    @staticmethod
+    def _wrap_html_email(body: str, subject: str = "") -> str:
+        """Wrap editor HTML content in a full email-compatible HTML document."""
+        return EMAIL_HTML_WRAPPER.format(subject=subject, body=body)
+
+    @staticmethod
+    def _extract_inline_images(html_body: str) -> Tuple[str, List[Dict]]:
+        """Extract base64 data-URI images from HTML and convert to CID references.
+
+        Returns:
+            (modified_html, list_of_inline_attachments)
+            Each attachment: {name, content_b64, content_type, cid}
+        """
+        attachments = []
+        counter = 0
+
+        def replace_data_uri(match):
+            nonlocal counter
+            content_type = match.group(1)
+            b64_data = match.group(2)
+            ext = "png" if "png" in content_type else "jpg"
+            cid = f"inline_img_{counter}"
+            name = f"image_{counter}.{ext}"
+            counter += 1
+            attachments.append({
+                "name": name,
+                "content": b64_data,
+                "contentType": content_type,
+                "contentId": cid,
+            })
+            return f'src="cid:{cid}"'
+
+        pattern = r'src="data:(image/[^;]+);base64,([^"]+)"'
+        modified = re.sub(pattern, replace_data_uri, html_body)
+        return modified, attachments
+
+    # ── Composition ──────────────────────────────────────────────────
 
     def compose_email(
         self,
@@ -58,20 +116,9 @@ class EmailSender:
         attachment: Tuple[str, bytes],
         cc_emails: Optional[List[str]] = None,
         extra_vars: Optional[dict] = None,
+        screenshot_data: Optional[Tuple[str, bytes]] = None,
     ) -> EmailComposition:
-        """Compose email with variable substitution.
-
-        Args:
-            template: Email template to use
-            mapping: Contact mapping with recipient and contact info
-            attachment: (filename, content_bytes) tuple
-            cc_emails: Additional CC emails
-            extra_vars: Extra template variables
-
-        Returns:
-            Composed email ready for sending
-        """
-        # Build template variables
+        """Compose email with variable substitution and CID image handling."""
         variables = {
             "tutor_name": (
                 mapping.contact.nombre_completo
@@ -86,28 +133,53 @@ class EmailSender:
             "fecha": date.today().strftime("%d/%m/%Y"),
             "periodo": str(date.today().year),
         }
-
         if extra_vars:
             variables.update(extra_vars)
 
-        # Substitute variables
+        # Handle screenshot — use CID reference for email delivery
+        screenshot_cid_attachment = None
+        if screenshot_data:
+            sname, scontent = screenshot_data
+            b64 = base64.b64encode(scontent).decode("utf-8")
+            screenshot_cid = "screenshot_excel"
+            screenshot_cid_attachment = {
+                "name": sname,
+                "content": b64,
+                "contentType": "image/png",
+                "contentId": screenshot_cid,
+            }
+            variables["screenshot"] = (
+                f'<img src="cid:{screenshot_cid}" '
+                f'style="max-width:100%;height:auto;display:block;margin:8px 0;" '
+                f'alt="Evaluación {mapping.recipient.nombre}">'
+            )
+        else:
+            variables["screenshot"] = ""
+
         subject = self._substitute_variables(template.subject, variables)
         body = self._substitute_variables(template.body, variables)
 
-        # Ensure body is HTML
         is_html = template.is_html
         if not is_html:
             body = self._plain_text_to_html(body)
             is_html = True
 
-        # Build CC list
+        # Extract any other inline base64 images from the body → CID
+        body, inline_attachments = self._extract_inline_images(body)
+
+        if screenshot_cid_attachment:
+            inline_attachments.append(screenshot_cid_attachment)
+
+        # Wrap in full email HTML
+        body = self._wrap_html_email(body, subject)
+
         cc_list = list(self._cc_emails)
         if cc_emails:
             cc_list.extend(cc_emails)
         if mapping.contact and mapping.contact.email_cc:
             cc_list.append(mapping.contact.email_cc)
 
-        return EmailComposition(
+        composition = EmailComposition(
             to=mapping.contact.email,
             cc=cc_list,
             subject=subject,
@@ -116,16 +188,12 @@ class EmailSender:
             attachment_filename=attachment[0],
             attachment_content=attachment[1],
         )
+        # Store inline attachments on the composition object for send_email
+        composition._inline_attachments = inline_attachments
+        return composition
 
     def send_email(self, composition: EmailComposition) -> SendResult:
-        """Send single email via Power Automate.
-
-        Args:
-            composition: Composed email to send
-
-        Returns:
-            SendResult with status
-        """
+        """Send single email via Power Automate with full attachment support."""
         if not self._url:
             return SendResult(
                 recipient=Recipient(codigo="unknown", nombre="unknown"),
@@ -139,12 +207,28 @@ class EmailSender:
                 composition.attachment_content
             ).decode("utf-8")
 
+            # Build attachments array: main Excel file + inline images
+            attachments = [
+                {
+                    "name": composition.attachment_filename,
+                    "content": attachment_b64,
+                    "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                }
+            ]
+
+            # Add CID inline image attachments
+            inline_atts = getattr(composition, "_inline_attachments", [])
+            for att in inline_atts:
+                attachments.append(att)
+
             payload = {
                 "to": composition.to,
                 "cc": ";".join(composition.cc) if composition.cc else "",
                 "subject": composition.subject,
                 "body": composition.body,
                 "isHtml": composition.is_html,
+                "attachments": attachments,
+                # Keep legacy fields for backward compatibility
                 "attachmentName": composition.attachment_filename,
                 "attachmentContent": attachment_b64,
             }
@@ -201,19 +285,7 @@ class EmailSender:
         test_mode: bool = False,
         screenshots: Optional[List[Tuple[str, bytes]]] = None,
     ) -> ProcessingResult:
-        """Send batch of emails.
-
-        Args:
-            mappings: Contact mappings
-            blocks: Data blocks (one per Tutor)
-            generated_files: List of (filename, content) tuples
-            template: Email template (uses default if None)
-            cc_emails: Additional CC emails
-            test_mode: If True, skip actual sending
-
-        Returns:
-            ProcessingResult with all results
-        """
+        """Send batch of emails with CID-embedded screenshots."""
         tpl = template or self._template
         result = ProcessingResult(
             total=len(mappings),
@@ -232,7 +304,6 @@ class EmailSender:
         for mapping in mappings:
             nombre = mapping.recipient.nombre
 
-            # Handle excluded
             if mapping.excluded or mapping.recipient.excluded:
                 result.excluded += 1
                 result.results.append(SendResult(
@@ -242,7 +313,6 @@ class EmailSender:
                 ))
                 continue
 
-            # Handle no email
             if not mapping.email_found or not mapping.contact:
                 result.sent_failed += 1
                 result.results.append(SendResult(
@@ -252,7 +322,6 @@ class EmailSender:
                 ))
                 continue
 
-            # Get file for this tutor
             file_data = file_lookup.get(nombre)
             if not file_data:
                 result.sent_failed += 1
@@ -263,7 +332,6 @@ class EmailSender:
                 ))
                 continue
 
-            # Find block for extra variables
             block = next(
                 (b for b in blocks if b.recipient.nombre == nombre), None
             )
@@ -271,27 +339,22 @@ class EmailSender:
             if block:
                 extra_vars["num_profesionales"] = str(len(block.entries))
 
-            # Add screenshot variable if available
+            # Find screenshot for this tutor
+            screenshot_data = None
             if screenshots:
                 tutor_safe = nombre.replace(" ", "_")
                 for sname, scontent in screenshots:
                     if tutor_safe in sname:
-                        b64 = base64.b64encode(scontent).decode("utf-8")
-                        extra_vars["screenshot"] = (
-                            '<img src="data:image/png;base64,' + b64
-                            + '" style="max-width:100%;height:auto;">'
-                        )
+                        screenshot_data = (sname, scontent)
                         break
-                if "screenshot" not in extra_vars:
-                    extra_vars["screenshot"] = ""
 
-            # Compose
             composition = self.compose_email(
                 template=tpl,
                 mapping=mapping,
                 attachment=file_data,
                 cc_emails=cc_emails,
                 extra_vars=extra_vars,
+                screenshot_data=screenshot_data,
             )
 
             if test_mode:
@@ -317,47 +380,27 @@ class EmailSender:
         return result
 
     def check_status(self) -> dict:
-        """Check Power Automate URL reachability.
-
-        Returns:
-            Dict with 'available' (bool) and 'message' (str)
-        """
         if not self._url:
             return {
                 "available": False,
                 "message": "Power Automate URL no configurada (POWER_AUTOMATE_URL)",
             }
-
         try:
             response = requests.post(
-                self._url,
-                json={"ping": True},
-                timeout=15,
+                self._url, json={"ping": True}, timeout=15,
             )
             if response.status_code in (200, 202):
                 return {"available": True, "message": "Power Automate conectado"}
             elif response.status_code < 500:
                 return {"available": True, "message": "Power Automate conectado (URL accesible)"}
             else:
-                return {
-                    "available": False,
-                    "message": f"Error Power Automate: HTTP {response.status_code}",
-                }
+                return {"available": False, "message": f"Error Power Automate: HTTP {response.status_code}"}
         except requests.exceptions.ConnectionError:
-            return {
-                "available": False,
-                "message": "No se puede conectar a Power Automate URL",
-            }
+            return {"available": False, "message": "No se puede conectar a Power Automate URL"}
         except requests.exceptions.Timeout:
-            return {
-                "available": False,
-                "message": "Timeout al conectar con Power Automate",
-            }
+            return {"available": False, "message": "Timeout al conectar con Power Automate"}
         except Exception as e:
-            return {
-                "available": False,
-                "message": f"Error verificando Power Automate: {str(e)}",
-            }
+            return {"available": False, "message": f"Error verificando Power Automate: {str(e)}"}
 
     def preview_email(
         self,
@@ -365,11 +408,7 @@ class EmailSender:
         block: DataBlock,
         screenshots: Optional[List[Tuple[str, bytes]]] = None,
     ) -> dict:
-        """Preview email content without attachment.
-
-        Returns:
-            Dict with to, cc, subject, body
-        """
+        """Preview email content — uses data-URI for browser display."""
         variables = {
             "tutor_name": (
                 mapping.contact.nombre_completo
@@ -386,7 +425,6 @@ class EmailSender:
             "periodo": str(date.today().year),
         }
 
-        # Add screenshot variable if available
         if screenshots:
             nombre = mapping.recipient.nombre
             tutor_safe = nombre.replace(" ", "_")
@@ -395,7 +433,7 @@ class EmailSender:
                     b64 = base64.b64encode(scontent).decode("utf-8")
                     variables["screenshot"] = (
                         '<img src="data:image/png;base64,' + b64
-                        + '" style="max-width:100%;height:auto;">'
+                        + '" style="max-width:100%;height:auto;display:block;margin:8px 0;">'
                     )
                     break
         if "screenshot" not in variables:
@@ -417,13 +455,11 @@ class EmailSender:
 
     @staticmethod
     def _plain_text_to_html(text: str) -> str:
-        """Convert plain text to HTML preserving line breaks."""
         escaped = html_module.escape(text)
         return escaped.replace("\n", "<br>\n")
 
     @staticmethod
     def _substitute_variables(text: str, variables: dict) -> str:
-        """Substitute {{variable}} placeholders in text."""
         result = text
         for var_name, value in variables.items():
             placeholder = f"{{{{{var_name}}}}}"

@@ -1,9 +1,9 @@
 # Architecture Design: Formación Evaluation Splitter
 
-> **Version:** 1.0.0
+> **Version:** 2.0.0
 > **App Name:** Formación Evaluation Splitter
 > **Port:** 8002
-> **Last Updated:** 2026-03-05
+> **Last Updated:** 2026-03-10
 
 ---
 
@@ -128,11 +128,22 @@
 │  │  │ EmailSender    │                                                │  │
 │  │  │                │  Variables:                                     │  │
 │  │  │ compose_email()│  {{tutor_name}}, {{num_profesionales}},        │  │
-│  │  │ send_email()   │  {{fecha}}, {{periodo}}                        │  │
-│  │  │ send_batch()   │                                                │  │
-│  │  │ check_status() │  Payload → Power Automate HTTP POST           │  │
-│  │  │ preview_email()│  Timeout: 60s                                  │  │
-│  │  └────────────────┘                                                │  │
+│  │ send_email()   │  {{fecha}}, {{periodo}}, {{screenshot}}        │  │
+│  │ send_batch()   │                                                │  │
+│  │ check_status() │  Payload → Power Automate HTTP POST           │  │
+│  │ preview_email()│  CID inline images + HTML wrapper              │  │
+│  └────────────────┘  Timeout: 60s                                  │  │
+│  │                                                                │  │
+│  │  ┌────────────────┐                                            │  │
+│  │  │ DataManager    │  NEW v2.0.0                                │  │
+│  │  │                │                                            │  │
+│  │  │ sync_data_on_  │  External data:                            │  │
+│  │  │ startup()      │  /home/rootadmin/data/Control_formacion/   │  │
+│  │  │ create_run_    │  ├── temp/ (per-run files)                 │  │
+│  │  │ folder()       │  ├── basedata/ (synced templates)          │  │
+│  │  │ add_history_   │  └── history.json (max 10 runs)            │  │
+│  │  │ entry()        │                                            │  │
+│  │  └────────────────┘                                            │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
 │                                                                          │
 │  ┌────────────────────────────────────────────────────────────────────┐  │
@@ -227,16 +238,31 @@
 │  │  Scope: Single server process (--workers 1)         │  │
 │  └─────────────────────────────────────────────────────┘  │
 │                                                           │
-│  ┌─── Persistent (File System) ──────────────────────┐  │
+│  ┌─── Persistent (File System — Local App Data) ─────┐  │
 │  │                                                     │  │
 │  │  data/contacts_store.json                           │  │
-│  │  {                                                  │  │
-│  │    "contacts": { "tutor_name": Contact, ... },      │  │
-│  │    "last_updated": "ISO-8601 datetime"              │  │
-│  │  }                                                  │  │
+│  │  data/column_presets.json                           │  │
+│  │  data/email_templates.json                          │  │
 │  │                                                     │  │
 │  │  Lifecycle: Persists across restarts                 │  │
-│  │  Deletion: Password-protected (Formacion2026)       │  │
+│  │  Auto-synced to external data directory              │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                           │
+│  ┌─── Persistent (External Data Directory) ──────────┐  │
+│  │                                                     │  │
+│  │  /home/rootadmin/data/Control_formacion/            │  │
+│  │  ├── temp/                                          │  │
+│  │  │   └── run_YYYYMMDD_HHMMSS/                      │  │
+│  │  │       ├── generated/  (Excel files)              │  │
+│  │  │       └── screenshots/ (PNG files)               │  │
+│  │  ├── basedata/                                      │  │
+│  │  │   ├── contacts_store.json                        │  │
+│  │  │   ├── column_presets.json                        │  │
+│  │  │   └── email_templates.json                       │  │
+│  │  └── history.json  (max 10 entries, auto-cleanup)   │  │
+│  │                                                     │  │
+│  │  Lifecycle: Survives app updates (git pull)          │  │
+│  │  Sync: Bidirectional on startup, push on changes    │  │
 │  └─────────────────────────────────────────────────────┘  │
 │                                                           │
 │  ┌─── Configuration (File System) ───────────────────┐  │
@@ -275,7 +301,7 @@
 │  Step 6: Preview + Send (exclusions, test mode, results)         │
 │                                                                   │
 ├──────────────────────────────────────────────────────────────────┤
-│  Status: ● Power Automate    v1.0.0                              │
+│  Status: ● Power Automate    v2.0.0  [Historial]                 │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -302,6 +328,9 @@
 │                                          │
 │  Volumes:                                │
 │  - ./data:/app/data (contacts persist)   │
+│  - /home/rootadmin/data/Control_formacion│
+│    :/home/rootadmin/data/Control_formaci │
+│    on (external persistent data)         │
 │  - ./.env:/app/.env:ro                   │
 │                                          │
 │  Port: 8002:8002                         │
