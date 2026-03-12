@@ -1,9 +1,9 @@
 # Architecture Design: Formación Evaluation Splitter
 
-> **Version:** 2.0.0
+> **Version:** 2.1.0
 > **App Name:** Formación Evaluation Splitter
 > **Port:** 8002
-> **Last Updated:** 2026-03-10
+> **Last Updated:** 2026-03-12
 
 ---
 
@@ -131,7 +131,7 @@
 │  │ send_email()   │  {{fecha}}, {{periodo}}, {{screenshot}}        │  │
 │  │ send_batch()   │                                                │  │
 │  │ check_status() │  Payload → Power Automate HTTP POST           │  │
-│  │ preview_email()│  CID inline images + HTML wrapper              │  │
+│  │ preview_email()│  CID inline images + clean HTML wrapper        │  │
 │  └────────────────┘  Timeout: 60s                                  │  │
 │  │                                                                │  │
 │  │  ┌────────────────┐                                            │  │

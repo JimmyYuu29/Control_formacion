@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 60
 
-# Full HTML email wrapper — uses inline styles only for maximum email client compatibility
+# Full HTML email wrapper — uses inline styles only for maximum email client compatibility.
+# Clean layout without card/border effects to avoid visible side borders in email clients.
 EMAIL_HTML_WRAPPER = """\
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -38,14 +39,10 @@ EMAIL_HTML_WRAPPER = """\
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{subject}</title>
 </head>
-<body style="margin:0;padding:0;background-color:#f4f4f4;font-family:Calibri,Arial,Helvetica,sans-serif;line-height:1.6;color:#333333;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f4;">
-<tr><td align="center" style="padding:20px 10px;">
-<table role="presentation" width="680" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,0.1);max-width:680px;width:100%;">
+<body style="margin:0;padding:0;background-color:#ffffff;font-family:Calibri,Arial,Helvetica,sans-serif;line-height:1.6;color:#333333;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#ffffff;">
 <tr><td style="padding:24px 32px;">
 {body}
-</td></tr>
-</table>
 </td></tr>
 </table>
 </body>
@@ -137,21 +134,12 @@ class EmailSender:
         if extra_vars:
             variables.update(extra_vars)
 
-        # Handle screenshot — use CID reference for email delivery
-        screenshot_cid_attachment = None
+        # Handle screenshot — embed as base64 data URI directly in HTML
         if screenshot_data:
             sname, scontent = screenshot_data
             b64 = base64.b64encode(scontent).decode("utf-8")
-            screenshot_cid = "screenshot_excel"
-            screenshot_cid_attachment = {
-                "Name": sname,
-                "ContentBytes": b64,
-                "ContentType": "image/png",
-                "ContentId": screenshot_cid,
-                "IsInline": True,
-            }
             variables["screenshot"] = (
-                f'<img src="cid:{screenshot_cid}" '
+                f'<img src="data:image/png;base64,{b64}" '
                 f'style="max-width:100%;height:auto;display:block;margin:8px 0;" '
                 f'alt="Evaluación {mapping.recipient.nombre}">'
             )
@@ -169,11 +157,8 @@ class EmailSender:
             body = self._plain_text_to_html(body)
             is_html = True
 
-        # Extract any other inline base64 images from the body → CID
-        body, inline_attachments = self._extract_inline_images(body)
-
-        if screenshot_cid_attachment:
-            inline_attachments.append(screenshot_cid_attachment)
+        # Editor-inserted images already use base64 data URIs — keep them as-is
+        # (no CID conversion needed since data URIs work in Outlook)
 
         # Wrap in full email HTML
         body = self._wrap_html_email(body, subject)
@@ -193,8 +178,6 @@ class EmailSender:
             attachment_filename=attachment[0],
             attachment_content=attachment[1],
         )
-        # Store inline attachments on the composition object for send_email
-        composition._inline_attachments = inline_attachments
         return composition
 
     def send_email(self, composition: EmailComposition) -> SendResult:
@@ -212,20 +195,15 @@ class EmailSender:
                 composition.attachment_content
             ).decode("utf-8")
 
-            # CID inline images (screenshots + editor images) — separate from Excel
-            cid_attachments = getattr(composition, "_inline_attachments", [])
-
             payload = {
                 "to": composition.to,
                 "cc": ";".join(composition.cc) if composition.cc else "",
                 "subject": composition.subject,
                 "body": composition.body,
                 "isHtml": composition.is_html,
-                # Excel attachment via direct base64 fields (reliable, no array parsing)
+                # Excel attachment only — images are embedded as data URIs in body
                 "attachmentName": composition.attachment_filename,
                 "attachmentContent": attachment_b64,
-                # CID inline images (screenshots, editor images) — array for Power Automate loop
-                "cidAttachments": cid_attachments,
             }
 
             response = requests.post(

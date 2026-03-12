@@ -1,10 +1,10 @@
 # Technical Specification: Formación Evaluation Splitter
 
-> **Version:** 2.0.0
+> **Version:** 2.1.0
 > **App Name:** Formación Evaluation Splitter
 > **Category:** Excel Upload → Split → Email Distribution
 > **Organization:** Forvis Mazars
-> **Last Updated:** 2026-03-10
+> **Last Updated:** 2026-03-12
 
 ---
 
@@ -376,11 +376,10 @@ class ProcessingResult(BaseModel):
 - Sends via Power Automate HTTP POST webhook
 - 60-second timeout per request
 - Batch sending with test mode and exclusion support
-- **CID-based inline image embedding** (replaces data-URI base64 for email compatibility)
-- **Full HTML email wrapper** with table-based layout and inline styles
-- Screenshots sent as separate CID attachments (`cid:screenshot_excel`)
-- Inline images extracted from editor HTML and converted to CID attachments
-- Multiple attachments support: Excel file + CID images in single payload
+- **Base64 data URI image embedding** — screenshots and editor images embedded directly in HTML body
+- **Clean HTML email wrapper** — white background without card borders or shadows
+- No CID attachments needed — images are self-contained in the HTML
+- **Simple payload** — only Excel attachment fields (`attachmentName`/`attachmentContent`), all images in `body`
 
 ### 7.5 DataManager (services/data_manager.py) — NEW v2.0.0
 
@@ -396,45 +395,26 @@ class ProcessingResult(BaseModel):
 
 ## 8. Power Automate JSON Payload
 
-### 8.1 Standard Payload (v2.0.0 with attachments array)
+### 8.1 Standard Payload (v2.1.0 — images embedded in body)
 
 ```json
 {
   "to": "tutor@example.com",
   "cc": "cc1@example.com;cc2@example.com",
   "subject": "Evaluación Formación — Juan Berral",
-  "body": "<html>...<img src='cid:screenshot_excel'>...</html>",
+  "body": "<html>...<img src='data:image/png;base64,...'>...</html>",
   "isHtml": true,
   "attachmentName": "Juan_Berral_evaluaciones.xlsx",
-  "attachmentContent": "BASE64_ENCODED_EXCEL",
-  "attachments": [
-    {
-      "name": "Juan_Berral_evaluaciones.xlsx",
-      "content": "BASE64_ENCODED_EXCEL",
-      "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    },
-    {
-      "name": "screenshot.png",
-      "content": "BASE64_ENCODED_PNG",
-      "contentType": "image/png",
-      "contentId": "screenshot_excel"
-    },
-    {
-      "name": "inline_img_1.png",
-      "content": "BASE64_ENCODED_PNG",
-      "contentType": "image/png",
-      "contentId": "inline_img_1"
-    }
-  ]
+  "attachmentContent": "BASE64_ENCODED_EXCEL"
 }
 ```
 
-### 8.2 Key Changes from v1.x
+### 8.2 Key Changes from v2.0.0
 
-- **`attachments` array**: Supports multiple attachments including CID-referenced inline images
-- **`contentId` field**: Enables inline image display in email body via `cid:` references
-- **HTML wrapper**: Body is wrapped in a complete HTML document with table-based layout
-- Legacy `attachmentName`/`attachmentContent` fields kept for backward compatibility
+- **Base64 data URI images**: Screenshots and editor images embedded directly in HTML body — no CID, no inline attachments
+- **Simplified payload**: Only `attachmentName`/`attachmentContent` for the Excel file
+- **Simplified Power Automate**: Single attachment entry, no CID/IsInline configuration
+- **Clean HTML wrapper**: White background without card borders or shadows
 - See `docs/POWER_AUTOMATE_FLOW.md` for complete flow construction guide
 ```
 
