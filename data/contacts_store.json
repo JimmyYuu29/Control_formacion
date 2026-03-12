@@ -1,10 +1,10 @@
 {
   "contacts": {
     "OSCAR HERRANZ": {
-      "codigo": "Oscar Herranz",
-      "nombre": "Oscar Herranz",
+      "codigo": "Óscar Herranz",
+      "nombre": "Óscar Herranz",
       "apellido": null,
-      "email": "oscar.herranz@test.com",
+      "email": "yihao.yu@mazars.es",
       "email_cc": "cc1@test.com"
     },
     "JUAN BERRAL": {
@@ -15,12 +15,12 @@
       "email_cc": null
     },
     "MARIA GREGORIO": {
-      "codigo": "Maria Gregorio",
-      "nombre": "Maria Gregorio",
+      "codigo": "María Gregorio",
+      "nombre": "María Gregorio",
       "apellido": null,
       "email": "maria.gregorio@test.com",
       "email_cc": "cc2@test.com"
     }
   },
-  "last_updated": "2026-03-10T12:03:08.027870"
+  "last_updated": "2026-03-12T19:52:00.450837"
 }

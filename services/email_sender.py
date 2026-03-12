@@ -96,10 +96,11 @@ class EmailSender:
             name = f"image_{counter}.{ext}"
             counter += 1
             attachments.append({
-                "name": name,
-                "content": b64_data,
-                "contentType": content_type,
-                "contentId": cid,
+                "Name": name,
+                "ContentBytes": b64_data,
+                "ContentType": content_type,
+                "ContentId": cid,
+                "IsInline": True,
             })
             return f'src="cid:{cid}"'
 
@@ -143,10 +144,11 @@ class EmailSender:
             b64 = base64.b64encode(scontent).decode("utf-8")
             screenshot_cid = "screenshot_excel"
             screenshot_cid_attachment = {
-                "name": sname,
-                "content": b64,
-                "contentType": "image/png",
-                "contentId": screenshot_cid,
+                "Name": sname,
+                "ContentBytes": b64,
+                "ContentType": "image/png",
+                "ContentId": screenshot_cid,
+                "IsInline": True,
             }
             variables["screenshot"] = (
                 f'<img src="cid:{screenshot_cid}" '
@@ -157,7 +159,10 @@ class EmailSender:
             variables["screenshot"] = ""
 
         subject = self._substitute_variables(template.subject, variables)
-        body = self._substitute_variables(template.body, variables)
+
+        # Strip the decorative screenshot placeholder wrapper so only {{screenshot}} remains
+        raw_body = self._clean_screenshot_placeholder(template.body)
+        body = self._substitute_variables(raw_body, variables)
 
         is_html = template.is_html
         if not is_html:
@@ -207,19 +212,8 @@ class EmailSender:
                 composition.attachment_content
             ).decode("utf-8")
 
-            # Build attachments array: main Excel file + inline images
-            attachments = [
-                {
-                    "name": composition.attachment_filename,
-                    "content": attachment_b64,
-                    "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                }
-            ]
-
-            # Add CID inline image attachments
-            inline_atts = getattr(composition, "_inline_attachments", [])
-            for att in inline_atts:
-                attachments.append(att)
+            # CID inline images (screenshots + editor images) — separate from Excel
+            cid_attachments = getattr(composition, "_inline_attachments", [])
 
             payload = {
                 "to": composition.to,
@@ -227,10 +221,11 @@ class EmailSender:
                 "subject": composition.subject,
                 "body": composition.body,
                 "isHtml": composition.is_html,
-                "attachments": attachments,
-                # Keep legacy fields for backward compatibility
+                # Excel attachment via direct base64 fields (reliable, no array parsing)
                 "attachmentName": composition.attachment_filename,
                 "attachmentContent": attachment_b64,
+                # CID inline images (screenshots, editor images) — array for Power Automate loop
+                "cidAttachments": cid_attachments,
             }
 
             response = requests.post(
@@ -440,7 +435,8 @@ class EmailSender:
             variables["screenshot"] = ""
 
         subject = self._substitute_variables(self._template.subject, variables)
-        body = self._substitute_variables(self._template.body, variables)
+        raw_body = self._clean_screenshot_placeholder(self._template.body)
+        body = self._substitute_variables(raw_body, variables)
 
         cc_list = list(self._cc_emails)
         if mapping.contact and mapping.contact.email_cc:
@@ -457,6 +453,31 @@ class EmailSender:
     def _plain_text_to_html(text: str) -> str:
         escaped = html_module.escape(text)
         return escaped.replace("\n", "<br>\n")
+
+    @staticmethod
+    def _clean_screenshot_placeholder(html_body: str) -> str:
+        """Strip the decorative screenshot placeholder wrapper, keeping only {{screenshot}}.
+
+        The rich-text editor inserts a styled div with descriptive text around
+        the {{screenshot}} variable.  Before substitution we reduce the entire
+        wrapper to just the bare placeholder so the <img> tag (or empty string)
+        replaces everything cleanly.
+
+        Multiple patterns handle browser style normalization (hex vs RGB, with/without spaces).
+        """
+        patterns = [
+            # Original hex color as inserted by JS: background:#fff3cd
+            r'<div[^>]*style="[^"]*background(?:-color)?[^:]*:\s*#fff3cd[^"]*"[^>]*>.*?\{\{screenshot\}\}.*?</div>',
+            # Browser-normalized RGB: background-color: rgb(255, 243, 205)
+            r'<div[^>]*style="[^"]*background(?:-color)?[^:]*:\s*rgb\(255,\s*243,\s*205\)[^"]*"[^>]*>.*?\{\{screenshot\}\}.*?</div>',
+            # Fallback: match by unique placeholder text content (any wrapper style)
+            r'<div[^>]*>.*?\{\{screenshot\}\}.*?Captura del Excel se insertara aqui automaticamente.*?</div>',
+        ]
+        for pattern in patterns:
+            result = re.sub(pattern, "{{screenshot}}", html_body, flags=re.DOTALL | re.IGNORECASE)
+            if result != html_body:
+                return result
+        return html_body
 
     @staticmethod
     def _substitute_variables(text: str, variables: dict) -> str:

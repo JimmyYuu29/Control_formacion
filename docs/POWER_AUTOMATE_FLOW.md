@@ -105,33 +105,37 @@ This document provides a complete guide for building the Power Automate flow tha
         },
         "attachmentName": {
             "type": "string",
-            "description": "Primary attachment filename (legacy, for backward compatibility)"
+            "description": "Excel attachment filename"
         },
         "attachmentContent": {
             "type": "string",
-            "description": "Primary attachment base64 content (legacy)"
+            "description": "Excel attachment base64-encoded content"
         },
-        "attachments": {
+        "cidAttachments": {
             "type": "array",
-            "description": "Array of all attachments including CID inline images",
+            "description": "CID inline images only (screenshots, editor images). Excel is NOT included here.",
             "items": {
                 "type": "object",
                 "properties": {
-                    "name": {
+                    "Name": {
                         "type": "string",
-                        "description": "Filename (e.g., file.xlsx, screenshot.png)"
+                        "description": "Filename (e.g., screenshot.png)"
                     },
-                    "content": {
+                    "ContentBytes": {
                         "type": "string",
-                        "description": "Base64-encoded file content"
+                        "description": "Base64-encoded image content"
                     },
-                    "contentType": {
+                    "ContentType": {
                         "type": "string",
-                        "description": "MIME type (e.g., image/png, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)"
+                        "description": "MIME type (e.g., image/png)"
                     },
-                    "contentId": {
+                    "ContentId": {
                         "type": "string",
-                        "description": "Content-ID for CID inline images (optional, only for inline images)"
+                        "description": "Content-ID referenced in HTML as cid:<ContentId>"
+                    },
+                    "IsInline": {
+                        "type": "boolean",
+                        "description": "Always true for CID inline images"
                     }
                 }
             }
@@ -157,39 +161,51 @@ This document provides a complete guide for building the Power Automate flow tha
 
 ### 4.2 Attachments Configuration (CRITICAL for v2.0.0)
 
-The `attachments` array in the payload contains ALL attachments — both the main Excel file and CID-referenced inline images.
+The payload separates Excel and CID images into **two distinct fields** to avoid connector parsing issues:
 
-**Option A: Using the `attachments` array directly (Recommended)**
+| Field | Purpose | Flow configuration |
+|-------|---------|-------------------|
+| `attachmentName` + `attachmentContent` | Excel file (base64) | Individual attachment fields |
+| `cidAttachments` | CID inline images only | "Apply to each" loop |
 
-In the "Send an email (V2)" action's advanced options:
+#### Step A: Excel attachment (individual fields — simple and reliable)
 
-1. Click **"Show advanced options"**
-2. Find **"Attachments"**
-3. Switch to **"Enter entire array"** mode
-4. Use this expression:
+In the "Send an email (V2)" action's **Attachments** section, click **"Add new item"**:
+
+| Attachment field | Expression |
+|-----------------|------------|
+| **Name** | `@{triggerBody()?['attachmentName']}` |
+| **Content** | `@{triggerBody()?['attachmentContent']}` |
+| **Content Type** | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` |
+
+This uses the base64-encoded Excel content directly — the most reliable approach.
+
+#### Step B: CID inline images (Apply to each loop)
+
+Add an **"Apply to each"** action **before** the Send email action:
+
+1. Loop over: `@triggerBody()?['cidAttachments']`
+2. Inside the loop, use a **"Append to array variable"** action to build a `varCidAttachments` array
+3. Value to append: the current item (expression: `@items('Apply_to_each')`)
+
+Then in "Send an email (V2)", add more items to Attachments from `varCidAttachments`, or use a second "Enter entire array" mode for the CID images only:
 
 ```
-@{triggerBody()?['attachments']}
+@variables('varCidAttachments')
 ```
 
-**Option B: Apply to each (if Option A doesn't work)**
-
-If your connector doesn't support direct array input:
-
-1. Add **"Apply to each"** loop over `@{triggerBody()?['attachments']}`
-2. Inside the loop, use the "Send an email (V2)" action outside the loop
-3. For each attachment in the loop, add it to a variable array first
+> **Note:** If your template has no screenshots, `cidAttachments` will be an empty array and the loop does nothing.
 
 ### 4.3 Handling CID Inline Images
 
 CID (Content-ID) images are a standard mechanism for embedding images in HTML emails:
 
-1. The image is sent as an attachment with a `contentId` field
-2. The HTML body references it with `src="cid:<contentId>"`
+1. The image is sent as an attachment with `ContentId` and `IsInline: true`
+2. The HTML body references it with `src="cid:<ContentId>"`
 3. The email client displays the image inline in the body
 
 **Example:**
-- Attachment: `{ "name": "screenshot.png", "content": "...", "contentType": "image/png", "contentId": "screenshot_excel" }`
+- Attachment: `{ "Name": "screenshot.png", "ContentBytes": "...", "ContentType": "image/png", "ContentId": "screenshot_excel", "IsInline": true }`
 - HTML: `<img src="cid:screenshot_excel" alt="Captura">`
 
 Most email clients (Outlook, Gmail, Apple Mail) support CID images correctly.
@@ -205,39 +221,36 @@ Most email clients (Outlook, Gmail, Apple Mail) support CID images correctly.
   "to": "tutor@example.com",
   "cc": "manager@example.com;hr@example.com",
   "subject": "Evaluación Formación — Juan Berral",
-  "body": "<!DOCTYPE html><html><head><meta charset='UTF-8'>...</head><body><table width='100%'>...<img src='cid:screenshot_excel'>...</table></body></html>",
+  "body": "<!DOCTYPE html>...<img src='cid:screenshot_excel'>...</html>",
   "isHtml": true,
   "attachmentName": "Juan_Berral_evaluaciones.xlsx",
   "attachmentContent": "UEsDBBQAAAAI...(base64 Excel)",
-  "attachments": [
+  "cidAttachments": [
     {
-      "name": "Juan_Berral_evaluaciones.xlsx",
-      "content": "UEsDBBQAAAAI...(base64 Excel)",
-      "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      "Name": "screenshot.png",
+      "ContentBytes": "iVBORw0KGgo...(base64 PNG)",
+      "ContentType": "image/png",
+      "ContentId": "screenshot_excel",
+      "IsInline": true
     },
     {
-      "name": "screenshot.png",
-      "content": "iVBORw0KGgo...(base64 PNG)",
-      "contentType": "image/png",
-      "contentId": "screenshot_excel"
-    },
-    {
-      "name": "inline_img_1.png",
-      "content": "iVBORw0KGgo...(base64 PNG)",
-      "contentType": "image/png",
-      "contentId": "inline_img_1"
+      "Name": "inline_img_1.png",
+      "ContentBytes": "iVBORw0KGgo...(base64 PNG)",
+      "ContentType": "image/png",
+      "ContentId": "inline_img_1",
+      "IsInline": true
     }
   ]
 }
 ```
 
-### 5.2 Attachment Types
+### 5.2 Attachment Fields
 
-| Type | Purpose | Has `contentId`? | Appears in body? |
-|------|---------|:---:|:---:|
-| Excel (.xlsx) | Main file attachment | No | No — appears as downloadable attachment |
-| Screenshot (.png) | Excel data screenshot | Yes (`screenshot_excel`) | Yes — via `<img src="cid:screenshot_excel">` |
-| Inline Image (.png/.jpg) | Images from email editor | Yes (`inline_img_N`) | Yes — via `<img src="cid:inline_img_N">` |
+| Field | Type | Contains | Flow field |
+|-------|------|---------|------------|
+| `attachmentName` | string | Excel filename | Attachments → Name |
+| `attachmentContent` | string (base64) | Excel file bytes | Attachments → Content |
+| `cidAttachments` | array | CID inline images only | Apply to each loop |
 
 ---
 
@@ -317,6 +330,18 @@ The app uses **CID attachments** as the optimal balance between compatibility an
 
 ## 8. Troubleshooting
 
+### Issue: Excel attachment cannot be opened ("formato no coincide con extensión")
+
+**Cause:** The Excel content was not reaching the connector as actual file bytes.
+
+**Fix (v2.0.0 architecture):** Excel attachment uses **individual fields**, NOT the array:
+- Attachments → Name: `@{triggerBody()?['attachmentName']}`
+- Attachments → Content: `@{triggerBody()?['attachmentContent']}`
+
+`attachmentContent` is already base64-encoded by the app — the connector decodes it automatically.
+
+---
+
 ### Issue: Images not displaying in email
 
 1. Verify the `contentId` in attachments matches the `cid:` reference in HTML
@@ -349,9 +374,9 @@ A v1.x flow will still work for the Excel attachment but will not show inline im
 
 If you have an existing v1.x Power Automate flow:
 
-1. Update the HTTP trigger schema to include the `attachments` property (see Section 3)
-2. In the "Send an email (V2)" action, change attachments from single file to array mode
-3. Use `@{triggerBody()?['attachments']}` for the attachments field
+1. Update the HTTP trigger schema to include the `cidAttachments` property (see Section 3)
+2. In the "Send an email (V2)" action, keep Excel in individual attachment fields (`attachmentName` / `attachmentContent`)
+3. Add an "Apply to each" loop over `@triggerBody()?['cidAttachments']` for inline images
 4. Save and test with the app's test mode
 
 No changes needed to the trigger URL — the same URL works for both v1.x and v2.0.0 payloads.
