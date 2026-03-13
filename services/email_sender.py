@@ -134,16 +134,15 @@ class EmailSender:
         if extra_vars:
             variables.update(extra_vars)
 
-        # Handle screenshot — embed as base64 data URI directly in HTML
+        # Handle screenshot — use a distinctive HTML comment placeholder so that
+        # Power Automate can replace it with <img src="SharePoint URL">.
+        # The base64 PNG is sent as a separate payload field (screenshotContent).
+        # If no screenshot is available, the placeholder is an empty string.
         if screenshot_data:
             sname, scontent = screenshot_data
-            b64 = base64.b64encode(scontent).decode("utf-8")
-            variables["screenshot"] = (
-                f'<img src="data:image/png;base64,{b64}" '
-                f'style="max-width:100%;height:auto;display:block;margin:8px 0;" '
-                f'alt="Evaluación {mapping.recipient.nombre}">'
-            )
+            variables["screenshot"] = "<!--SCREENSHOT_PLACEHOLDER-->"
         else:
+            sname, scontent = None, None
             variables["screenshot"] = ""
 
         subject = self._substitute_variables(template.subject, variables)
@@ -178,6 +177,11 @@ class EmailSender:
             attachment_filename=attachment[0],
             attachment_content=attachment[1],
         )
+        # Attach screenshot data for send_email → Power Automate payload
+        composition._screenshot_name = sname or ""
+        composition._screenshot_b64 = (
+            base64.b64encode(scontent).decode("utf-8") if scontent else ""
+        )
         return composition
 
     def send_email(self, composition: EmailComposition) -> SendResult:
@@ -201,9 +205,13 @@ class EmailSender:
                 "subject": composition.subject,
                 "body": composition.body,
                 "isHtml": composition.is_html,
-                # Excel attachment only — images are embedded as data URIs in body
+                # Excel attachment
                 "attachmentName": composition.attachment_filename,
                 "attachmentContent": attachment_b64,
+                # Screenshot for SharePoint temporary storage in Power Automate
+                # Empty strings when no screenshot was generated
+                "screenshotName": getattr(composition, "_screenshot_name", ""),
+                "screenshotContent": getattr(composition, "_screenshot_b64", ""),
             }
 
             response = requests.post(

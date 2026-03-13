@@ -330,9 +330,14 @@ class ExcelGenerator:
 
             # 2. Convert XLSX → PDF via LibreOffice headless
             # --nofirststartwizard / --norestore: skip UI dialogs in headless mode
+            # -env:UserInstallation: isolate LO user profile per conversion to
+            #   prevent lock file conflicts on Linux servers running as a service
             # NOTE: --calc is intentionally omitted — it conflicts with --convert-to in headless mode
+            lo_profile = os.path.join(tmpdir, "lo_profile")
+            os.makedirs(lo_profile, exist_ok=True)
             cmd = [
                 soffice,
+                f"-env:UserInstallation=file://{lo_profile}",
                 "--headless",
                 "--nofirststartwizard",
                 "--norestore",
@@ -340,11 +345,12 @@ class ExcelGenerator:
                 "--outdir", tmpdir,
                 xlsx_path,
             ]
-            # On Linux (Docker): set HOME to writable tmpdir so LibreOffice can
-            # create its user profile without failing on restricted home dirs
+            # On Linux: set HOME to writable tmpdir so LibreOffice can write
+            # its profile without failing on restricted home dirs (systemd services)
             run_env = os.environ.copy()
             if os.name != "nt":
                 run_env["HOME"] = tmpdir
+                run_env["TMPDIR"] = tmpdir
 
             result = subprocess.run(
                 cmd,
