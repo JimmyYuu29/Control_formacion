@@ -329,19 +329,29 @@ class ExcelGenerator:
                 f.write(prepared_content)
 
             # 2. Convert XLSX → PDF via LibreOffice headless
+            # --nofirststartwizard / --norestore: skip UI dialogs in headless mode
+            # NOTE: --calc is intentionally omitted — it conflicts with --convert-to in headless mode
             cmd = [
                 soffice,
                 "--headless",
-                "--calc",
+                "--nofirststartwizard",
+                "--norestore",
                 "--convert-to", "pdf",
                 "--outdir", tmpdir,
                 xlsx_path,
             ]
+            # On Linux (Docker): set HOME to writable tmpdir so LibreOffice can
+            # create its user profile without failing on restricted home dirs
+            run_env = os.environ.copy()
+            if os.name != "nt":
+                run_env["HOME"] = tmpdir
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=60,
+                env=run_env,
             )
             if result.returncode != 0:
                 logger.error(
